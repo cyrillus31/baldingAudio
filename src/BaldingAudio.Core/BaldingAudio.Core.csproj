@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Platform-agnostic core. Deliberately free of any Windows / Win32 reference so
+    that the DSP, direction estimation and overlay rasterisation can be built and
+    unit-tested on any OS (CI runs Linux).
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>BaldingAudio.Core</RootNamespace>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+    <IsTrimmable>true</IsTrimmable>
+  </PropertyGroup>
+
+</Project>

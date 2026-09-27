@@ -1,0 +1,24 @@
+## .NET
+bin/
+obj/
+*.user
+*.suo
+*.userprefs
+
+## Build output
+artifacts/
+publish/
+out/
+
+## IDE
+.vs/
+.idea/
+.vscode/
+*.swp
+
+## OS
+.DS_Store
+Thumbs.db
+
+## Runtime
+*.log

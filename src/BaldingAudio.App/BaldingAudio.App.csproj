@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The Windows shell. This is the only project that touches Win32, and it does so
+    through two narrow surfaces:
+
+      1. WASAPI loopback capture  (reads the audio endpoint mix - public API)
+      2. A layered topmost window  (a plain window; no hooks, no injection)
+
+    No P/Invoke below is capable of writing to another process, injecting code,
+    or driving input. That is a deliberate design constraint, not an accident.
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <RootNamespace>BaldingAudio.App</RootNamespace>
+    <AssemblyName>baldingAudio</AssemblyName>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <ApplicationDefaultFont>Segoe UI, 9pt</ApplicationDefaultFont>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <DebugType>embedded</DebugType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\BaldingAudio.Core\BaldingAudio.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="BaldingAudio.Core.Tests" />
+  </ItemGroup>
+
+</Project>
