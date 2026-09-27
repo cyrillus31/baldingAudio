@@ -49,23 +49,13 @@ public sealed class OverlayRenderer
             var tipX = ax + dx * length;
             var tipY = ay + dy * length;
 
-            // The body: brightest at the tip, dimmer where it meets the screen border,
-            // so the line reads as reaching in from the edge.
+            // A flat line, no fade and no brighter end. It used to brighten toward the
+            // inner tip, to read as reaching in off the border - but nothing is anchored
+            // to a border now, so both ends of a line mean the same thing and ramping
+            // between them would only imply a direction that is not there.
             buffer.FillCapsule(
                 ax, ay, tipX, tipY, radius, l.Colour, l.Alpha,
-                alphaAtStart: (float)_style.BorderFade,
-                alphaAtEnd: 1.0f);
-
-            if (!_style.ShowTipCap) continue;
-
-            // A short, brighter cap at the inner end. On a 1/8-screen line this is a few
-            // dozen pixels, which is what makes the reach readable at a glance.
-            var capLength = (float)(length * _style.TipCapFraction);
-            var capStartX = tipX - dx * capLength;
-            var capStartY = tipY - dy * capLength;
-            buffer.FillCapsule(
-                capStartX, capStartY, tipX, tipY, radius,
-                l.Colour.WithAlpha(255), l.Alpha, alphaAtStart: 0.75f, alphaAtEnd: 1.0f);
+                alphaAtStart: 1.0f, alphaAtEnd: 1.0f);
         }
     }
 }

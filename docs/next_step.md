@@ -53,10 +53,26 @@ Then observe, in this order:
 Expect the first run to need tuning, and expect the tuning to be about levels rather
 than about direction, because direction is already verified.
 
+**Status, and the blocker to clear first.** The overlay does react to real audio now
+(bearings track live in the log), and the layout is settled: two side scales, front at
+top, confirmed by the user. But the run above cannot be completed on this machine yet.
+The playback endpoint is **stereo 2ch 44100 Hz, mask 0x3 (FL+FR only)**, so the
+front/back axis is not measurable - the log shows `loudest -172°` with level 0.000,
+which is the analyser saying "I heard something but I cannot place it". Until the
+endpoint is 7.1, only the left/right axis can be judged, and "does a footstep produce a
+line at roughly the right bearing" is only half answerable.
+
+To fix: Windows → Sound → Playback → Configure → 7.1. No code change needed. It is the
+single highest-value thing to do next, because every remaining question about direction
+is blocked on it.
+
 ## Colour should encode pitch, not class (the user's idea, 2026-09-28)
 
-Recorded during the first real test attempt. All cues are red today purely because
-"colour should not mean anything yet" was the earlier decision; this supersedes it.
+Recorded during the first real test attempt. `OverlayStyle`'s code default is a single
+red for every class, but the config on the user's machine overrides all six with
+distinct colours (footstep green, gunshot red, explosion orange, vehicle purple, voice
+grey, other white). So colour-by-class is already half-implemented by config alone, and
+"colour should not mean anything yet" is no longer true. This supersedes it.
 
 **The idea:** a line's colour reflects how high the sound is. High sounds read as
 **red**, low sounds read as **purple**, and a mix of high and low content blends

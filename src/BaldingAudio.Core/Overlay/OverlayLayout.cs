@@ -6,28 +6,38 @@ namespace BaldingAudio.Core.Overlay;
 /// Geometry and styling for the visual indicator, in normalised 0..1 screen
 /// coordinates so it scales with any resolution and DPI.
 ///
-/// The display is a compass drawn on the border of the screen. Each cue owns a
-/// position on that border, chosen by which way the sound came from, and a line that
-/// reaches inward from the border toward the centre of the screen:
+/// Two side scales. Lines run inward from the left and right edges, and height on
+/// screen means front/behind:
 ///
-///   dead ahead  ->  top edge
-///   to the right ->  right edge
-///   behind you  ->  bottom edge
-///   to the left  ->  left edge
+///   sign of azimuth  ->  which edge. Negative starts at the left edge and runs right,
+///                        positive starts at the right edge and runs left. Exactly zero
+///                        goes right, having no side of its own.
+///   |azimuth|        ->  height. 0 (straight ahead) is the top of the band, 90 (to the
+///                        side) is the middle, 180 (behind) is the bottom.
 ///
-/// Anything in between lands in between, so "slightly right and forward" sits on the
-/// top edge toward the right, and "behind and to the left" sits on the bottom edge
-/// toward the left. Because a wide screen's corners are reached at about 150 degrees
-/// rather than 135, the familiar bottom-left and bottom-right corners are where rear
-/// flankers appear.
+/// So a sound in front and to the left starts at the left edge, near the top; one
+/// behind and to the left starts at the left edge, near the bottom. Both halves of the
+/// direction survive - this is a different decomposition of the bearing, not a coarser
+/// one.
+///
+/// The top and bottom edges are never used. The band is inset, so nothing projects
+/// inward from the top or the bottom, and the extremes sit clear of both.
 ///
 /// Because the game pans audio into the player's own frame of reference, "front" and
 /// "right" are relative to where the player is looking. Turning rotates the whole
-/// compass without the overlay needing to know anything about the camera.
+/// display without the overlay needing to know anything about the camera.
 ///
 /// The line's <b>length</b> encodes loudness, and its <b>thickness</b> is constant, so
 /// it reads as a line rather than a dot. Nothing is drawn at all when nothing is
 /// happening: the indicator appears on a sound and recedes when it stops.
+///
+/// <para>
+/// This replaced a compass drawn on the screen border with radial lines, and before
+/// that a 2D field with lines floating around the middle of the screen. The user
+/// rejected both: the border version put cues in the corners where the game's own UI
+/// lives, and the floating version put every cue in the middle of the view. See
+/// <c>AGENTS.md</c>.
+/// </para>
 /// </summary>
 public sealed class OverlayStyle
 {
@@ -41,16 +51,33 @@ public sealed class OverlayStyle
     public double MinLengthFraction { get; set; } = 0.010;
 
     /// <summary>
-    /// Alpha of the outer end of a line, as a fraction of the inner end. Below 1 so the
-    /// line brightens as it reaches inward, which reads as movement off the border.
+    /// Blank margin kept between the top and bottom of the screen and the ends of the
+    /// side scales, as a fraction of the shorter screen dimension.
+    ///
+    /// This is why nothing is ever drawn at the very top or the very bottom: the
+    /// vertical range is inset, so "straight ahead" is the top of the band rather than
+    /// the top edge of the screen. A fraction rather than a pixel count, so it survives
+    /// a resolution change.
     /// </summary>
-    public double BorderFade { get; set; } = 0.45;
+    public double FieldInsetFraction { get; set; } = 0.06;
 
-    /// <summary>Bright cap at the inner tip, which makes the reach unambiguous.</summary>
-    public bool ShowTipCap { get; set; } = true;
+    /// <summary>
+    /// How far each line starts from its side edge, as a fraction of the shorter screen
+    /// dimension. Small by default, so lines read as growing in from the edge.
+    ///
+    /// This is the knob for the corner problem. Games put their minimap and ammo counter
+    /// in the bottom corners, and lines starting hard at the edge would run under them.
+    /// Raising this pulls every line's outer end in from the edge, and nothing else
+    /// changes.
+    /// </summary>
+    public double SideInsetFraction { get; set; } = 0.01;
 
-    /// <summary>Fraction of the line's length used by the bright tip cap.</summary>
-    public double TipCapFraction { get; set; } = 0.30;
+    /// <summary>
+    /// How much of the available height the scales span, 0..1. 1 puts straight ahead at
+    /// the top of the band and directly behind at the bottom; smaller pulls both toward
+    /// the middle of the screen.
+    /// </summary>
+    public double FieldRadiusYFraction { get; set; } = 0.84;
 
     /// <summary>
     /// All cues share one colour for now. Colour is not carrying information; the
@@ -122,39 +149,51 @@ public static class OverlayLayout
         => azimuthDegrees < -8 ? 0 : azimuthDegrees > 8 ? 1 : 2;
 
     /// <summary>
-    /// Finds the point where a bearing from the centre of the screen meets the border,
-    /// plus the unit vector from that point back toward the centre.
+    /// Finds where a line starts on the screen, and which way it runs inward.
     ///
-    /// Azimuth 0 is the top edge, +90 the right edge, 180 the bottom edge, -90 the left.
+    /// A bearing is encoded as (sign, magnitude) rather than as a point on a circle:
+    ///
+    ///   side    the sign of the bearing. Negative is the left edge, positive the right,
+    ///           and the line runs inward from there. Exactly 0 - dead ahead - goes to
+    ///           the right, since it has no side of its own.
+    ///   height  |bearing|, 0 at the top of the band and 180 at the bottom. So the closer
+    ///           to the top, the more in front the sound is, and the closer to the
+    ///           bottom, the more behind.
+    ///
+    /// Both halves survive, so nothing is lost: this is a different decomposition of the
+    /// same bearing, not a coarser one. The top and bottom edges are never used, because
+    /// the band is inset by <see cref="OverlayStyle.FieldInsetFraction"/>, so a cue
+    /// straight ahead is a line near the top - never a line hanging off the top edge.
     /// </summary>
-    public static void BorderAnchor(
+    public static void EdgeAnchor(
         int screenWidth,
         int screenHeight,
         double azimuthDegrees,
-        double inset,
+        OverlayStyle style,
         out double x,
         out double y,
         out double dx,
         out double dy)
     {
-        var rad = azimuthDegrees * Math.PI / 180.0;
-        var ux = Math.Sin(rad);
-        var uy = -Math.Cos(rad); // screen y grows downward, so -cos puts 0 at the top
+        var toLeft = azimuthDegrees < 0;
+        var magnitude = Math.Abs(azimuthDegrees);
 
-        var cx = screenWidth * 0.5;
+        var shortest = Math.Min(screenWidth, screenHeight);
+        var inset = style.FieldInsetFraction * shortest;
+        var sideInset = style.SideInsetFraction * shortest;
+        var halfThickness = Math.Max(3.0, style.LineThicknessFraction * shortest) * 0.5;
+
+        // Centre the band vertically, then scale it about that centre, so shrinking the
+        // radius pulls both extremes toward the middle of the screen.
         var cy = screenHeight * 0.5;
-        var hw = Math.Max(1.0, cx - inset);
-        var hh = Math.Max(1.0, cy - inset);
+        var bandRadius = Math.Max(0.0, cy - inset - halfThickness) * style.FieldRadiusYFraction;
 
-        // How far the centre is from the border along this bearing.
-        var toVerticalEdge = Math.Abs(ux) < 1e-9 ? double.PositiveInfinity : hw / Math.Abs(ux);
-        var toHorizontalEdge = Math.Abs(uy) < 1e-9 ? double.PositiveInfinity : hh / Math.Abs(uy);
-        var t = Math.Min(toVerticalEdge, toHorizontalEdge);
+        y = cy - Math.Cos(magnitude * Math.PI / 180.0) * bandRadius;
+        x = toLeft ? sideInset : screenWidth - sideInset;
 
-        x = cx + ux * t;
-        y = cy + uy * t;
-        dx = -ux;
-        dy = -uy;
+        // Inward, and always horizontal.
+        dx = toLeft ? 1.0 : -1.0;
+        dy = 0.0;
     }
 
     /// <summary>Maps loudness (0..1) to line length in pixels.</summary>
@@ -177,14 +216,10 @@ public static class OverlayLayout
 
         var thickness = Math.Max(3.0, style.LineThicknessFraction * Math.Min(screenWidth, screenHeight));
 
-        // Sit the anchor half a thickness inside the border so the rounded end cap is
-        // not clipped by the screen edge.
-        var inset = thickness * 0.5;
-
         foreach (var e in events)
         {
-            BorderAnchor(
-                screenWidth, screenHeight, e.Direction.AzimuthDegrees, inset,
+            EdgeAnchor(
+                screenWidth, screenHeight, e.Direction.AzimuthDegrees, style,
                 out var ax, out var ay, out var dx, out var dy);
 
             var length = LengthForLevel(e.Level, screenWidth, style);
@@ -195,6 +230,8 @@ public static class OverlayLayout
             var distanceConfidence = 0.45 + 0.55 * Math.Clamp(e.DistanceConfidence, 0.0, 1.0);
             var alpha = Math.Clamp(e.Level, 0.0, 1.0) * confidence * distanceConfidence;
 
+            // (ax, ay) is the outer end at the side edge, and dx points inward, so the
+            // capsule is drawn from the edge toward the middle.
             result.Add(new LineGeometry(
                 Math.Round(ax, 2), Math.Round(ay, 2), Math.Round(dx, 6), Math.Round(dy, 6),
                 Math.Round(length), Math.Round(thickness),

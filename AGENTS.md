@@ -58,21 +58,44 @@ created it. `SpectrumExchange` double-buffers the direction spectrum between the
 
 ## The display model
 
-A compass drawn on the border of the screen.
+Two side scales. Lines run **inward from the left and right edges**, and height on
+screen means front/behind.
 
-- A cue's **azimuth** picks a point on the border: 0° = top, +90° = right, 180° =
-  bottom, −90° = left. In between lands in between.
-- A line runs **inward from the border toward the centre**.
+- The **sign of the azimuth** picks the edge: negative starts at the left edge and runs
+  right, positive starts at the right edge and runs left. Exactly 0 (dead ahead) goes
+  right, having no side of its own.
+- **|azimuth| picks the height**: 0° = top of the band (straight ahead), 90° = middle
+  (to the side), 180° = bottom (behind). Closer to the top is more in front, closer to
+  the bottom is more behind.
+- **Every line is horizontal.** Never anchored to the top or bottom edge, so nothing
+  projects inward from those.
 - **Length = loudness**, capped at 1/8 of screen width.
 - **Thickness is constant**, so it reads as a line.
 - **Nothing is drawn when nothing is sounding.**
-- All cues are **red**. Colour carries no information yet, by decision.
+- The band is inset by `FieldInsetFraction`, so the extremes sit clear of the top and
+  bottom edges. On 2560×1440: front y=193, side y=720, behind y=1247.
 
-On a 16:9 screen the corners are reached near **150°**, not 135°, so rear flankers land
-in the bottom-left and bottom-right corners. That is intentional, not a bug.
+Both halves of the direction survive. This encodes a bearing as (sign, |azimuth|) rather
+than (sin, cos) — a different decomposition, not a coarser one.
 
-The user has watched this run and rejected the first design. Trust the current one over
-anything written earlier. `docs/next_step.md` has the reasoning.
+The user has watched three designs run and rejected two. The current one is confirmed
+good: "front at top feels right". Trust it over anything written earlier.
+
+### Rejected designs, and why
+
+Do not bring these back without asking.
+
+1. **A compass on the screen border**, with radial lines reaching inward. Rejected: it
+   put rear flankers in the bottom-left and bottom-right **corners**, which is exactly
+   where the game's minimap and ammo counter live.
+2. **A 2D field inside the screen**, lines floating around the middle, x = sin and
+   y = cos. Rejected: "nothing is going on, i just see lines around the center of the
+   screen. i don't like it. they should come from the edges inwards."
+
+Corner clearance is a real concern the user raised and then deliberately deferred:
+"forget about ui for now". `SideInsetFraction` and `FieldRadiusYFraction` exist so it
+can be addressed as config, not a rewrite. The user does **not** want the band pulled
+toward the middle for now.
 
 ## Build and test
 
@@ -117,8 +140,13 @@ run.** Running it from `\\wsl$\...` fails.
 Display flags:
 
 - `--demo` scripted cues, no audio needed
-- `--demo-flood` every cue parked on screen at once, so the whole compass is visible
+- `--demo-flood` every cue parked on screen at once, so the whole field is visible
 - `--selftest` run the checks and exit
+
+**`--demo` and `--demo-flood` bypass the audio pipeline entirely** - they inject events
+directly and never run `SpatialAnalyzer`. They are for looking at geometry only. To
+check that the overlay *reacts*, run with no flag and play something. Use `--demo-flood`
+to judge layout, and no flag to judge behaviour; they will not tell you the same thing.
 
 ## Gotchas found the hard way
 

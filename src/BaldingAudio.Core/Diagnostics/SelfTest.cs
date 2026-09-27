@@ -29,7 +29,7 @@ public static class SelfTest
             TestLoudnessOrdering(),
             TestFrontBackResolved(),
             TestSilenceProducesNothing(),
-            TestCompassMapsBearingsToBorder(),
+            TestLinesRunInwardFromTheSideEdges(),
             TestLinesStaySmall(),
             TestLineFollowsAMovingSound(),
             TestLineFallsWhenSoundStops(),
@@ -234,49 +234,100 @@ public static class SelfTest
     }
 
     /// <summary>
-    /// The display is a compass on the screen border: dead ahead must be the top edge,
-    /// behind must be the bottom edge, and the two must be at the same height, so that
-    /// "higher on the screen" and "further from the bottom" mean the same thing.
+    /// Lines run inward from the left and right edges, and height on screen means
+    /// front/behind. Three things have to hold, and the design rests on all of them:
+    ///
+    ///   * the sign of the bearing picks the edge and |bearing| picks the height, so both
+    ///     halves of the direction survive rather than one being thrown away
+    ///   * every line is horizontal and starts at a side edge, and none is ever anchored
+    ///     to the top or the bottom, so nothing projects inward from those
+    ///   * the band is inset, so the frontmost and rearmost cues are still well clear of
+    ///     the top and bottom edges
+    ///
+    /// This builds real lines through <c>BuildLines</c> rather than sampling the mapping,
+    /// because it is the drawn extent that has to stay clear, not the anchor point.
     /// </summary>
-    private static Result TestCompassMapsBearingsToBorder()
+    private static Result TestLinesRunInwardFromTheSideEdges()
     {
         const int W = 2560, H = 1440;
-        var s = OverlayStyle.Default();
-        var inset = s.LineThicknessFraction * Math.Min(W, H) * 0.5;
+        var style = OverlayStyle.Default();
+        var inset = style.FieldInsetFraction * Math.Min(W, H);
+        var sideInset = style.SideInsetFraction * Math.Min(W, H);
 
-        static (double x, double y) At(int w, int h, double az, double inset)
-        {
-            OverlayLayout.BorderAnchor(w, h, az, inset, out var x, out var y, out _, out _);
-            return (x, y);
-        }
+        static LineGeometry At(double az, OverlayStyle s)
+            => OverlayLayout.BuildLines(
+                new List<AudioEvent> { new(new Direction(az, 0), 1.0, 0, SoundClass.Gunshot, 1, 1, 1, 0) },
+                W, H, s)[0];
 
-        var ahead = At(W, H, 0, inset);
-        var right = At(W, H, 90, inset);
-        var behind = At(W, H, 180, inset);
-        var left = At(W, H, -90, inset);
+        var ahead = At(0, style);
+        var right = At(90, style);
+        var behind = At(180, style);
+        var left = At(-90, style);
 
-        if (ahead.y > inset + 4) return new(N, false, $"dead ahead landed at y={ahead.y:F0}, expected the top edge");
-        if (behind.y < H - inset - 4) return new(N, false, $"behind landed at y={behind.y:F0}, expected the bottom edge");
-        if (right.x < W - inset - 4) return new(N, false, $"right landed at x={right.x:F0}, expected the right edge");
-        if (left.x > inset + 4) return new(N, false, $"left landed at x={left.x:F0}, expected the left edge");
+        // Front is high, behind is low.
+        if (ahead.Y > H * 0.5) return new(N, false, $"dead ahead landed at y={ahead.Y:F0}, expected the upper half");
+        if (behind.Y < H * 0.5) return new(N, false, $"directly behind landed at y={behind.Y:F0}, expected the lower half");
+        if (ahead.Y >= behind.Y) return new(N, false, $"front y={ahead.Y:F0} is not above behind y={behind.Y:F0}");
 
-        // Left and right are the mirror of each other, and front and back are too.
-        if (Math.Abs(right.y - left.y) > 1) return new(N, false, $"left/right not mirrored: y={left.y:F0} vs {right.y:F0}");
-        if (Math.Abs(ahead.x - behind.x) > 1) return new(N, false, $"front/back not aligned: x={ahead.x:F0} vs {behind.x:F0}");
+        // The sign picks the side, and each side runs inward.
+        if (left.Dx <= 0) return new(N, false, $"a left-hand sound runs at dx={left.Dx:F2}, expected inward (rightwards)");
+        if (right.Dx >= 0) return new(N, false, $"a right-hand sound runs at dx={right.Dx:F2}, expected inward (leftwards)");
 
-        // Anything at all should be inside the screen, or it would be clipped.
+        // 90 degrees is to the side, so it sits halfway up the band, and the two sides
+        // mirror each other.
+        if (Math.Abs(left.Y - right.Y) > 1) return new(N, false, $"left/right not mirrored: y={left.Y:F0} vs {right.Y:F0}");
+        if (Math.Abs(left.Y - H * 0.5) > H * 0.1) return new(N, false, $"a sound at 90 degrees landed at y={left.Y:F0}, expected near the vertical middle {H * 0.5:F0}");
+
         for (var az = -180.0; az <= 180.0; az += 5)
         {
-            var p = At(W, H, az, inset);
-            if (p.x < 0 || p.x > W || p.y < 0 || p.y > H)
-                return new(N, false, $"azimuth {az:F0} landed outside the screen at ({p.x:F0},{p.y:F0})");
+            var l = At(az, style);
+
+            if (Math.Abs(l.Dy) > 1e-9)
+                return new(N, false, $"azimuth {az:F0} drew a line at dy={l.Dy:F2}, every line must be horizontal");
+
+            // X is the outer end, at the side edge, and dx points inward from it, so the
+            // inner tip is reached by walking the direction over the line's length.
+            var outerX = l.X;
+            var innerX = l.X + l.Dx * l.Length;
+            var expectedOuter = az < 0 ? sideInset : W - sideInset;
+            if (Math.Abs(outerX - expectedOuter) > 1)
+                return new(N, false, $"azimuth {az:F0} starts at x={outerX:F0}, expected the side edge at {expectedOuter:F0}");
+
+            // Nothing may reach the top or the bottom, at any bearing, at full loudness.
+            var y0 = l.Y - l.Thickness * 0.5;
+            var y1 = l.Y + l.Thickness * 0.5;
+            if (y0 < inset - 0.5 || y1 > H - inset + 0.5)
+                return new(N, false,
+                    $"azimuth {az:F0} drew a line at y {y0:F0}..{y1:F0}, " +
+                    $"which breaks the {inset:F0}px margin from the top and bottom edges");
+
+            if (Math.Min(outerX, innerX) < 0 || Math.Max(outerX, innerX) > W)
+                return new(N, false, $"azimuth {az:F0} drew a line spanning x {outerX:F0}..{innerX:F0}, outside the screen");
+        }
+
+        // Shrinking the band must pull the extremes toward the middle of the screen. This
+        // is the knob that keeps the overlay off the game's own UI, so it has to work
+        // rather than merely exist.
+        var tight = OverlayStyle.Default();
+        tight.FieldRadiusYFraction = 0.40;
+
+        foreach (var az in new[] { 0.0, 60.0, 120.0, 180.0 })
+        {
+            var wide = At(az, style);
+            var small = At(az, tight);
+            if (Math.Abs(small.Y - H * 0.5) > Math.Abs(wide.Y - H * 0.5) + 0.5)
+                return new(N, false,
+                    $"azimuth {az:F0} did not move toward the middle when the band was shrunk: " +
+                    $"y {wide.Y:F0} -> {small.Y:F0}");
         }
 
         return new(N, true,
-            $"front y={ahead.y:F0}, rear y={behind.y:F0}, right x={right.x:F0}, left x={left.x:F0}; all 73 bearings on-screen");
+            $"front y={ahead.Y:F0}, side y={left.Y:F0}, behind y={behind.Y:F0}; " +
+            $"lines start at x={sideInset:F0} and {W - sideInset:F0} and run inward, " +
+            $"all 73 bearings horizontal and inside a {inset:F0}px vertical margin");
     }
 
-    private const string N = "compass maps bearings onto the screen border";
+    private const string N = "lines run inward from the side edges, height meaning front or behind";
 
     /// <summary>
     /// A line must never grow beyond a fraction of the screen, because the whole point
