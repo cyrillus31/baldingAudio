@@ -36,6 +36,7 @@ public sealed class AppHost : IDisposable
 
     private Stopwatch _clock = new();
     private double _lastTick;
+    private double _lastHeartbeat = -1;
     private long _framesDrawn;
     private long _eventsSeen;
     private double _lastNoiseFloorDb = -120;
@@ -194,6 +195,37 @@ public sealed class AppHost : IDisposable
 
         if (_analyzer is not null) _lastNoiseFloorDb = _analyzer.NoiseFloorDb;
         RaiseStatus();
+        LogHeartbeat(now);
+    }
+
+    /// <summary>
+    /// Writes a one-line-per-second summary to the log.
+    ///
+    /// Without this there is no way to tell "the game is silent" from "capture is
+    /// broken" from "the analyser is producing events the layout is throwing away" -
+    /// all three look identical, which is a blank screen. The tray tooltip carries
+    /// the same numbers, but nobody hovers a tray icon in a game.
+    /// </summary>
+    private void LogHeartbeat(double now)
+    {
+        if (now - _lastHeartbeat < 1.0) return;
+        _lastHeartbeat = now;
+
+        var mode = IsDemo ? "demo" : (_capture?.LayoutDescription ?? "no audio");
+        var spectrum = _analyzer is null ? null : _spectrumExchange.Snapshot();
+        var loudestBin = 0;
+        var loudest = 0.0;
+        if (spectrum is not null)
+        {
+            for (var i = 0; i < spectrum.Bins; i++)
+                if (spectrum[i] > loudest) { loudest = spectrum[i]; loudestBin = i; }
+        }
+        var bearing = spectrum is null ? 0.0 : spectrum.AzimuthOf(loudestBin);
+
+        Log.Info(
+            $"{mode} | peak {_lastDbfs,6:F0} dBFS | floor {_lastNoiseFloorDb,6:F0} dBFS | " +
+            $"events {Interlocked.Read(ref _eventsSeen)} | lines {_tracker.Visible.Count} | " +
+            $"loudest {bearing,5:F0}° level {loudest,5:F3} | {_framesDrawn} frames");
     }
 
     private void RaiseStatus()
