@@ -4,9 +4,10 @@ Working notes for this repository. Read this before changing anything.
 
 ## What this is
 
-A Windows overlay that shows *where* a sound came from, as short lines on the border of
-the screen. It exists because the user is deaf in one ear and needs to catch footsteps
-and gunfire in competitive shooters, mainly Battlefield 6, without being banned.
+A Windows overlay that shows *where* a sound came from, as short horizontal lines running
+inward from the left and right edges of the screen. It exists because the user is deaf in
+one ear and needs to catch footsteps and gunfire in competitive shooters, mainly
+Battlefield 6, without being banned.
 
 The single most important constraint is **the second one**. Everything else in this file
 is negotiable; that is not. See `docs/ANTI-CHEAT.md`.
@@ -96,6 +97,24 @@ Corner clearance is a real concern the user raised and then deliberately deferre
 "forget about ui for now". `SideInsetFraction` and `FieldRadiusYFraction` exist so it
 can be addressed as config, not a rewrite. The user does **not** want the band pulled
 toward the middle for now.
+
+## Open problems
+
+**`docs/OPEN_PROBLEMS.md` is the current list. Read it before starting anything.** Three
+are outstanding as of 2026-09-28, all reported by the user from a session in Bodycam:
+
+1. **The overlay sometimes stops appearing over the game**, and has to be re-raised by
+   alt-tabbing back to the game. Diagnosis not started. If the log keeps ticking while it
+   is invisible, it is a windowing fault with the analysis healthy — likely, and the
+   cheap case. Establish that before changing anything.
+2. **No sense of 3D — the lines did not move.** Two candidate causes, and the log from
+   that session distinguishes them in one line: bearings stuck at 0° means the old ITD
+   bug (already fixed in `5104192`), small but varying bearings means the device never
+   became 7.1. The first line of the log says `stereo (2ch)` or `7.1 (8ch)` outright.
+3. **Lines need a fill plus an outline, in two similar colours, for visibility.** Dark
+   lines disappear against a dark scene. Explicitly *not* black bars with a white
+   outline. This is a paint change on the existing layout — not a reason to revisit the
+   geometry, which has been rejected twice.
 
 ## Build and test
 
