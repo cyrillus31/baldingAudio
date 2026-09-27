@@ -82,41 +82,70 @@ public sealed class WasapiLoopbackCapture : IDisposable
             var iid = typeof(IAudioClient).GUID;
             var activateHr = _device.Activate(ref iid, MMDevice.CLSCTX_ALL, IntPtr.Zero, out var clientObj);
             if (activateHr < 0 || clientObj is null)
-                throw new InvalidOperationException($"Could not activate the audio client (hr=0x{activateHr:X8}).");
-
+                throw new InvalidOperationException(
+                    $"Could not activate IAudioClient (hr=0x{activateHr:X8}). " +
+                    "If this is E_NOINTERFACE the IID in WasapiInterop.cs is wrong.");
             _client = (IAudioClient)clientObj;
 
-            var mixHr = _client.GetMixFormat(out var mix);
+            // A wrong struct layout yields absurd channel counts rather than an error,
+            // so check the size before trusting anything read through it.
+            if (Marshal.SizeOf(typeof(WAVEFORMATEXTENSIBLE)) != WAVEFORMATEXTENSIBLE.NativeSize)
+                throw new InvalidOperationException(
+                    $"WAVEFORMATEXTENSIBLE is {Marshal.SizeOf(typeof(WAVEFORMATEXTENSIBLE))} bytes, " +
+                    $"expected {WAVEFORMATEXTENSIBLE.NativeSize}. The interop struct is wrong.");
+
+            // Read the mix format out of unmanaged memory by hand. Letting the CLR
+            // marshal WAVEFORMATEXTENSIBLE silently yields garbage - see the type.
+            var mixHr = _client.GetMixFormat(out var mixPtr);
             if (mixHr < 0) Marshal.ThrowExceptionForHR(mixHr);
+            var mix = WAVEFORMATEXTENSIBLE.Read(mixPtr);
+
+            if (mix.nChannels is < 1 or > 8 || mix.nSamplesPerSec < 8000)
+                throw new InvalidOperationException(
+                    $"Mix format read back as nonsense ({mix.nChannels} ch, {mix.nSamplesPerSec} Hz). " +
+                    "The interop struct layout is wrong.");
 
             _sampleRate = mix.SampleRate;
-            _channelCount = mix.Format.nChannels;
+            _channelCount = mix.nChannels;
             _channelMask = mix.dwChannelMask == 0 ? SpeakerPosition.Stereo : mix.dwChannelMask;
             _bytesPerSample = mix.BitsPerSample / 8;
             _bytesPerFrame = mix.BytesPerFrame;
 
-            var isFloat = mix.Format.wFormatTag == WAVEFORMATEX.WAVE_FORMAT_IEEE_FLOAT
-                          || mix.SubFormat == MMDevice.WaveFormatSubtypes_IeeeFloat;
-            if (!isFloat && _bytesPerSample != 2)
+            if (!mix.IsFloat && _bytesPerSample != 2)
                 throw new NotSupportedException(
                     $"Unsupported mix format: {mix}. Only 16-bit PCM and float are handled.");
 
-            _devicePeriod = _client.GetDevicePeriod(out var def, out var min);
-            if (_devicePeriod <= 0) _devicePeriod = def > 0 ? def : min > 0 ? min : 512;
+            _client.GetDevicePeriod(out var defPeriod, out var minPeriod);
+
+            // GetDevicePeriod reports 100-nanosecond units, not frames. 101587 is a
+            // perfectly normal answer and means 10.16 ms.
+            var periodMs = defPeriod / 10_000.0;
+            _devicePeriod = Math.Max(64, (int)(mix.SampleRate * periodMs / 1000.0));
 
             var bufferTicks = (long)options.BufferMilliseconds * 10_000;
-            var flags = AudioClientStreamFlags.Loopback | AudioClientStreamFlags.EventCallback;
 
-            var initHr = _client.Initialize(AudioClientShareMode.Shared, flags, bufferTicks, 0, ref mix, IntPtr.Zero);
+            // Initialise with the endpoint's own mix format rather than a format we would
+            // prefer. Asking a stereo-configured device for 7.1 fails with
+            // AUDCLNT_E_DEVICE_INVALIDATED (0x88890008); asking for what it already does
+            // always works. The device's channel count is also the only honest source of
+            // how many channels we can actually measure.
+            //
+            // Polling, not event-driven: WASAPI needs SetEventHandle before Start() when
+            // AUDCLNT_STREAMFLAGS_EVENTCALLBACK is requested, and we have no latency need
+            // for it - analysis runs on a 128-sample frame regardless.
+            var initHr = _client.Initialize(
+                AudioClientShareMode.Shared, AudioClientStreamFlags.Loopback,
+                bufferTicks, 0, mixPtr, IntPtr.Zero);
             if (initHr < 0)
             {
-                // Some drivers reject an event-driven loopback; fall back to polling.
-                initHr = _client.Initialize(AudioClientShareMode.Shared, AudioClientStreamFlags.Loopback, bufferTicks, 0, ref mix, IntPtr.Zero);
+                Marshal.ThrowExceptionForHR(initHr);
             }
-            if (initHr < 0) Marshal.ThrowExceptionForHR(initHr);
 
             var captureGuid = typeof(IAudioCaptureClient).GUID;
-            _client.GetService(ref captureGuid, out var captureObj);
+            var serviceHr = _client.GetService(ref captureGuid, out var captureObj);
+            if (serviceHr < 0 || captureObj is null)
+                throw new InvalidOperationException(
+                    $"Could not get IAudioCaptureClient (hr=0x{serviceHr:X8}).");
             _capture = (IAudioCaptureClient)captureObj;
 
             _deinterleaveScratch = new float[4096 * _channelCount];

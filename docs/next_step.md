@@ -53,6 +53,54 @@ Then observe, in this order:
 Expect the first run to need tuning, and expect the tuning to be about levels rather
 than about direction, because direction is already verified.
 
+## Colour should encode pitch, not class (the user's idea, 2026-09-28)
+
+Recorded during the first real test attempt. All cues are red today purely because
+"colour should not mean anything yet" was the earlier decision; this supersedes it.
+
+**The idea:** a line's colour reflects how high the sound is. High sounds read as
+**red**, low sounds read as **purple**, and a mix of high and low content blends
+between them. So a line's colour answers "what is this sound made of" the same way its
+position on the border answers "where is it from" and its length answers "how loud".
+
+Why it is a good idea: colour is the one channel that costs no screen space. Bearing
+and length are already spoken for, and pitch is genuinely useful for the target game —
+footsteps are low and thuddy, gunfire has a bright transient, explosions are broadband
+and low. It also means the overlay can carry information without getting any busier,
+which matters because the whole design goal is to stay in peripheral vision.
+
+**What is already there.** `SpatialAnalyzer` splits every channel into three bands
+(`LowBandHz` 90, mid, `HighBandCeilingHz` 7000 in `AudioTuning`) and computes
+`rLow`/`rMid`/`rHigh` ratios at the peak of each event. They are currently used only
+to pick a `SoundClass` and are not carried on `AudioEvent`.
+
+**What it needs.**
+
+1. Expose the band ratios (or a single spectral centroid in Hz) on `AudioEvent`.
+2. Carry it through `EventTracker.Track` and **smooth it with the same envelope as the
+   level** — an unsmoothed value would strobe the colour on every frame, which at 60 Hz
+   is a seizure risk and looks like a rendering fault.
+3. Map centroid to hue in `OverlayLayout`/`OverlayStyle`: purple ≈ 280°, red ≈ 0°, and
+   keep the existing alpha and length rules untouched.
+4. Clamp the range. A centroid is unstable on near-silent input, so gate it on level and
+   hold the last good value below `DisplayFloorDb` rather than interpolating noise.
+
+**Things to be careful about, to be checked by watching it run:**
+
+- **Red on a dark background is already the most visible choice we have.** Spending red
+  on "high" gives up the salience that made the first version work at all. Purple is
+  dimmer on most game content. This may need the line to get slightly brighter to
+  compensate, which trades against staying subtle.
+- **Peripheral vision barely resolves hue.** The whole point is that this is noticed
+  without looking. If colour turns out to be unreadable at the edges of vision, the
+  honest outcome is that it only works when you *do* look directly, and that should be
+  measured rather than assumed.
+- **Colour blindness.** Red/purple is a bad axis for the ~8% of men with red-green
+  deficiency. Worth a deuteranopia check before shipping it as the primary cue.
+
+Do this **after** direction has been confirmed against real game audio. If direction is
+wrong, a prettier wrong answer is still wrong.
+
 ## If the game test goes well
 
 Then, roughly in order of value:
