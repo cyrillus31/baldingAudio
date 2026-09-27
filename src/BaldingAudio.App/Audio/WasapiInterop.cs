@@ -238,13 +238,19 @@ internal static class MMDevice
     internal static readonly Guid WaveFormatSubtypes_IeeeFloat =
         new(0x00000003, 0x0000, 0x0010, 0x80, 0x00, 0x00, 0xAA, 0x00, 0x38, 0x9B, 0x71);
 
+    /// <summary>CLSID_MMDeviceEnumerator, from mmdeviceapi.h.</summary>
+    internal static readonly Guid ClsidDeviceEnumerator =
+        new("BCDE0395-E52F-467C-8E3D-C4579291692E");
+
     internal const int CLSCTX_ALL = 23;
     internal const int AUDCLNT_S_BUFFER_EMPTY = unchecked((int)0x08890001);
     internal const int AUDCLNT_E_DEVICE_INVALIDATED = unchecked((int)0x88890008);
+    internal const int AUDCLNT_E_UNSUPPORTED_FORMAT = unchecked((int)0x88890014);
+    internal const int AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED = unchecked((int)0x8889001A);
 
     public static IMMDeviceEnumerator CreateEnumerator()
     {
-        var clsid = new Guid("BCDE0395-E52F-467C-8E3D-C4579291692E");
+        var clsid = ClsidDeviceEnumerator;
         var iid = typeof(IMMDeviceEnumerator).GUID;
         var hr = CoCreateInstance(ref clsid, IntPtr.Zero, CLSCTX_ALL, ref iid, out var obj);
         Marshal.ThrowExceptionForHR(hr);

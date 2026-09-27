@@ -31,8 +31,20 @@ internal static class Program
         if (options.RunSelfTest)
         {
             Console.WriteLine("baldingAudio self-test");
+            Console.WriteLine();
+            Console.WriteLine("DSP and display:");
             var results = Core.Diagnostics.SelfTest.RunAll(Console.WriteLine);
-            var ok = Core.Diagnostics.SelfTest.AllPassed(results);
+            var coreOk = Core.Diagnostics.SelfTest.AllPassed(results);
+
+            // The Win32 declarations live here, not in Core, so they are checked here.
+            // Every fault that once stopped capture was a wrong constant or a wrong
+            // struct layout, and all of them are checkable without an audio device.
+            Console.WriteLine();
+            Console.WriteLine("Win32 interop:");
+            var interop = Audio.InteropSelfCheck.RunAll(Console.WriteLine);
+            var interopOk = Audio.InteropSelfCheck.AllPassed(interop);
+
+            var ok = coreOk && interopOk;
             Console.WriteLine(ok ? "\nALL PASSED" : "\nFAILURES PRESENT");
             return ok ? 0 : 1;
         }

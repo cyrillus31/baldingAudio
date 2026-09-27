@@ -96,6 +96,12 @@ There is no xunit test project yet. The self-test in
 headless on Linux. It is the fastest way to check a change, so extend it rather than
 leaving a fix unverified.
 
+`--selftest` runs two groups. The DSP and display checks come from Core. The Win32
+interop checks are in `src/BaldingAudio.App/Audio/InteropSelfCheck.cs`, because the
+Win32 declarations live in App and Core must stay free of them. Fourteen checks total.
+The interop group needs no audio device, so a wrong constant is caught in a second
+rather than on the user's machine.
+
 ## Running it on Windows
 
 WSL2 interop runs Windows executables natively, so no Windows-side .NET SDK is needed.
@@ -119,6 +125,20 @@ Display flags:
 - **`Biquad.Configure` must divide by `a0`.** Omitting it puts the poles outside the
   unit circle at low frequencies and the filter self-oscillates to `NaN` within a few
   thousand samples. This silently killed every direction estimate at one point.
+- **Never write a COM constant, IID or struct layout from memory.** Every fault that
+  stopped capture from starting was one: two invented interface IIDs,
+  `AUDCLNT_STREAMFLAGS_LOOPBACK` set to the `CROSSPROCESS` value, and a
+  `WAVEFORMATEXTENSIBLE` with no `Pack`. None of them fail where you would expect. A
+  wrong IID makes `IMMDevice.Activate` return `E_NOINTERFACE`, and the marshaller
+  reports that as `InvalidCastException` — so the stack trace points at the marshaller
+  and nowhere near the typo. A wrong flag gives `E_INVALIDARG`. A wrong layout returns
+  channel counts like 32843. All of it is checked by `InteropSelfCheck`, which runs
+  under `--selftest` on Linux; check the SDK header before changing any of it.
+- **`GetDevicePeriod` is in 100-nanosecond units, not frames.** 101587 is a normal
+  answer meaning 10.16 ms. Reading it as a frame count produces absurd periods.
+- **Initialise with the endpoint's own mix format.** Asking a stereo device for 7.1
+  fails with `AUDCLNT_E_DEVICE_INVALIDATED` (0x88890008). The device's channel count
+  is also the only honest source of how many channels can be measured.
 - **`WS_POPUP` creates a window hidden.** Without `ShowWindow(hwnd,
   SW_SHOWNOACTIVATE)` the overlay exists, has the right styles, and composites nothing.
   `IsWindowVisible` returning false was the only symptom.
