@@ -23,6 +23,7 @@ public static class SelfTest
     {
         var results = new List<Result>
         {
+            TestSustainedSoundReportsWhileSounding(),
             TestSingleSpeaker(),
             TestDominatedSpeaker(),
             TestLoudnessOrdering(),
@@ -110,6 +111,58 @@ public static class SelfTest
         x *= 0x5bd1e995u;
         x ^= x >> 15;
         return (x / (float)uint.MaxValue) * 2f - 1f;
+    }
+
+    /// <summary>
+    /// A sound that never stops must still produce an event, and produce it while it is
+    /// still sounding.
+    ///
+    /// This is the case the analyser used to get wrong, and nothing else covered it. The
+    /// other direction tests render a transient and then let the level fall silent, so
+    /// they pass whether or not events are emitted at the onset. The demo source injects
+    /// events directly and never runs the analyser at all. So a soundtrack - continuous
+    /// audio, which never meets the end-of-sound silence test - produced no events, and
+    /// the overlay stayed blank while the log showed a live direction spectrum.
+    /// </summary>
+    private static Result TestSustainedSoundReportsWhileSounding()
+    {
+        var a = New7_1();
+        var events = new List<AudioEvent>();
+        var total = (int)(2.0 * SampleRate);
+        var block = new float[1024 * 8];
+
+        // Continuous noise on the front-left channel: loud, unchanging, never silent.
+        for (var pos = 0; pos < total; pos += 1024)
+        {
+            var n = Math.Min(1024, total - pos);
+            Array.Clear(block);
+            for (var i = 0; i < n; i++)
+            {
+                var abs = pos + i;
+                foreach (var ch in Fl)
+                    block[i * 8 + ch] = 0.3f * Noise(abs, ch * 7919 + 13);
+            }
+            a.Process(block.AsSpan(0, n * 8), n, events);
+
+            // The first event must arrive well before the sound ends. If events only
+            // appear at the end, the analyser is reporting too late to be useful.
+            if (events.Count > 0 && pos < total - SampleRate / 2)
+            {
+                var e = events[0];
+                var reported = e.Timestamp;
+                return new(
+                    "a continuous sound is reported while it is still sounding",
+                    reported < 1.0,
+                    $"first event at {reported:F3}s of 2.0s of unbroken audio, " +
+                    $"azimuth {e.Direction.AzimuthDegrees:F0} deg, level {e.Level:F2}");
+            }
+        }
+
+        return new(
+            "a continuous sound is reported while it is still sounding",
+            false,
+            $"no event at all from 2.0s of unbroken audio ({events.Count} events). "
+            + "Continuous audio must not depend on silence to be reported.");
     }
 
     private static Result TestSingleSpeaker()

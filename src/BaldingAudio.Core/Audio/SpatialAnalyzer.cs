@@ -215,6 +215,7 @@ public sealed class SpatialAnalyzer
         var onOnset = _onset.Update(totalWeighted);
         if (onOnset)
         {
+            var wasAlreadySounding = _inEvent;
             _inEvent = true;
             _eventPeak = totalWeighted;
             _eventStartClock = _onset.ClockSeconds;
@@ -222,6 +223,22 @@ public sealed class SpatialAnalyzer
             _eventSilenceRun = 0;
             CapturePeakBandRatios();
             CaptureDirection(useStereo, 1.0);
+
+            // Emit now rather than when the sound stops.
+            //
+            // Waiting for the silence test below is wrong twice over. A line that only
+            // appears after the sound has finished is useless in a shooter. Worse, the
+            // test needs the level to sit 18 dB below the event's peak for 120 ms, and
+            // continuous audio never does that - music, an engine, a firefight - so a
+            // steady soundtrack produced no events at all and the overlay stayed blank
+            // while the analyser was demonstrably tracking it.
+            //
+            // Only the first onset of a sound emits; later onsets during the same sound
+            // update the peak instead, so one sound is one event. EventTracker.Follow
+            // keeps the line's level and bearing current from the live spectrum in the
+            // meantime, and the completion below still emits once more with the true
+            // peak so the line ends at the right length.
+            if (!wasAlreadySounding) Emit(output);
         }
         else if (_inEvent)
         {
@@ -239,7 +256,8 @@ public sealed class SpatialAnalyzer
         if (!_inEvent) return false;
         if (_eventSilenceRun <= 0.12) return false;
 
-        return CompleteEvent(output);
+        _inEvent = false;
+        return Emit(output);
     }
 
     /// <summary>
@@ -278,10 +296,16 @@ public sealed class SpatialAnalyzer
         }
     }
 
-    private bool CompleteEvent(List<AudioEvent> output)
+    /// <summary>
+    /// Turns the current in-progress sound into an <see cref="AudioEvent"/> and adds it
+    /// to <paramref name="output"/>.
+    ///
+    /// Called twice per sound: once at the onset, so the line appears while the sound is
+    /// happening, and once when the sound has finished, so the line's final length
+    /// reflects the true peak rather than the level at the instant it started.
+    /// </summary>
+    private bool Emit(List<AudioEvent> output)
     {
-        _inEvent = false;
-
         var dbfs = Decibel.FromMeanSquare(_eventPeak);
         LastEventDbfs = dbfs;
 
