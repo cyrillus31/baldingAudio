@@ -220,12 +220,18 @@ public sealed class AppHost : IDisposable
             for (var i = 0; i < spectrum.Bins; i++)
                 if (spectrum[i] > loudest) { loudest = spectrum[i]; loudestBin = i; }
         }
-        var bearing = spectrum is null ? 0.0 : spectrum.AzimuthOf(loudestBin);
+
+        // Only name a bearing when there is energy to name. An empty spectrum otherwise
+        // reports whichever bin happens to be index 0, which prints as "-172 deg level
+        // 0.000" and reads like a real measurement of a sound from behind. It is not one.
+        var where = loudest > 0.0005
+            ? $"{spectrum!.AzimuthOf(loudestBin),5:F0}° level {loudest,5:F3}"
+            : "silent          ";
 
         Log.Info(
             $"{mode} | peak {_lastDbfs,6:F0} dBFS | floor {_lastNoiseFloorDb,6:F0} dBFS | " +
             $"events {Interlocked.Read(ref _eventsSeen)} | lines {_tracker.Visible.Count} | " +
-            $"loudest {bearing,5:F0}° level {loudest,5:F3} | {_framesDrawn} frames");
+            $"loudest {where} | {_framesDrawn} frames");
     }
 
     private void RaiseStatus()

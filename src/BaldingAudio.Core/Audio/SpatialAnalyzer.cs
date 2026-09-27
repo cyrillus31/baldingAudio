@@ -39,6 +39,12 @@ public sealed class SpatialAnalyzer
     private readonly OnsetDetector _onset;
     private readonly StereoItd _stereo;
 
+    /// <summary>True when the two channels are a mix and not a pair of speakers.</summary>
+    private bool _useStereo;
+
+    /// <summary>Bearing StereoItd measured this frame. Read by BuildSpectrum.</summary>
+    private double _stereoAzimuth;
+
     private readonly double[] _bandEnergy = new double[BandCount];
     private readonly double[][] _channelBand;
     private readonly double[] _channelTotal = new double[MaxChannels];
@@ -206,6 +212,9 @@ public sealed class SpatialAnalyzer
 
         var totalWeighted = _bandEnergy[0] + 2.0 * _bandEnergy[1] + 1.5 * _bandEnergy[2];
 
+        _useStereo = useStereo;
+        if (useStereo) _stereoAzimuth = _stereo.Result.Direction.AzimuthDegrees;
+
         // Publish the current sound field every frame, not only on onsets, so the
         // overlay can follow a sound that is moving. Same per-channel energy the
         // direction estimate uses, so the two cannot disagree.
@@ -268,6 +277,27 @@ public sealed class SpatialAnalyzer
     private void BuildSpectrum()
     {
         Spectrum.Clear();
+
+        // Stereo is a mix, not a set of speakers, so per-channel position is meaningless
+        // here: putting half the energy at the fixed -60 of the left channel and half at
+        // the fixed +60 of the right describes the wiring, not the sound. Every bearing
+        // then reads the same, the tracker has no gradient to follow, and a line never
+        // moves - it just sits wherever its first event landed.
+        //
+        // So publish it once, at the bearing StereoItd actually measured. That agrees
+        // with the per-event direction, and gives the tracker a real peak to slew toward.
+        if (_useStereo)
+        {
+            var total = 0.0;
+            for (var c = 0; c < _channelCount; c++) total += _channelTotal[c];
+            if (total <= 1e-12) return;
+
+            var db = Decibel.FromMeanSquare(total);
+            var level = Decibel.ToUnit(db, _tuning.DisplayFloorDb, _tuning.DisplayCeilingDb, _tuning.LevelExponent);
+            if (level > 0) Spectrum.Add(_stereoAzimuth, level);
+            return;
+        }
+
         for (var c = 0; c < _channelCount; c++)
         {
             var energy = _channelTotal[c];

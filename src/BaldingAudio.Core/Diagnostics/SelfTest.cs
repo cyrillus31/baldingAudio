@@ -24,6 +24,8 @@ public static class SelfTest
         var results = new List<Result>
         {
             TestSustainedSoundReportsWhileSounding(),
+            TestStereoItdResolvesBothSides(),
+            TestStereoSpectrumFollowsTheMeasuredBearing(),
             TestSingleSpeaker(),
             TestDominatedSpeaker(),
             TestLoudnessOrdering(),
@@ -164,6 +166,144 @@ public static class SelfTest
             $"no event at all from 2.0s of unbroken audio ({events.Count} events). "
             + "Continuous audio must not depend on silence to be reported.");
     }
+
+    /// <summary>
+    /// On stereo the direction spectrum must report the bearing the analyser measured, not
+    /// the position of the physical channels.
+    ///
+    /// Stereo is a mix, not a pair of speakers. Publishing the left channel at its fixed
+    /// -60 degrees and the right at +60 describes the wiring rather than the sound, so
+    /// every bearing reads the same, the tracker has no gradient to follow, and a line
+    /// never moves - it sits wherever its first event happened to land. That is what made
+    /// a single bar stick to one side of the screen while the log showed the direction
+    /// estimate correctly alternating left and right.
+    ///
+    /// So: a hard-panned left signal and a hard-panned right one must put the spectrum's
+    /// peak on opposite sides of the screen, and a silent frame must leave it empty rather
+    /// than reporting some arbitrary bin.
+    /// </summary>
+    private static Result TestStereoSpectrumFollowsTheMeasuredBearing()
+    {
+        const int Ch = 2;
+
+        static (double Azimuth, double Level) Peak(SpatialAnalyzer a)
+        {
+            var s = a.Spectrum;
+            var best = 0.0;
+            var bestAz = double.NaN;
+            for (var i = 0; i < s.Bins; i++)
+                if (s[i] > best) { best = s[i]; bestAz = s.AzimuthOf(i); }
+            return (bestAz, best);
+        }
+
+        // Broadband noise, with one ear hearing it later than the other. That delay is the
+        // interaural time difference: the thing ITD measures, and what a source off to one
+        // side of the head really produces. Noise rather than a tone because a steady sine
+        // is identical in both channels apart from gain, so it has no delay to find and
+        // every ITD estimator reads it as dead ahead. Footsteps and gunfire are broadband,
+        // and so is this.
+        //
+        // `rightDelay` is how many samples late the right ear hears the source. Positive
+        // means the source is on the LEFT, because the near ear always hears it first.
+        static double Run(int rightDelay, int frames = 300)
+        {
+            var a = new SpatialAnalyzer(SpeakerPosition.Stereo, Ch, SampleRate);
+            var events = new List<AudioEvent>();
+            var block = new float[1024 * Ch];
+            var total = frames * 1024;
+
+            for (var i = 0; i < total; i++)
+            {
+                var p = i % 1024;
+                block[p * Ch + 0] = Noise(i, 4242);
+                block[p * Ch + 1] = i - rightDelay >= 0 ? Noise(i - rightDelay, 4242) : 0f;
+
+                if (p == 1023) a.Process(block.AsSpan(0, 1024 * Ch), 1024, events);
+            }
+
+            var (az, level) = Peak(a);
+            return level > 0.0005 ? az : double.NaN;
+        }
+
+        var left = Run(rightDelay: 20);
+        var right = Run(rightDelay: -20);
+
+        if (double.IsNaN(left))
+            return new(N3, false, "a source on the left left the direction spectrum empty");
+        if (double.IsNaN(right))
+            return new(N3, false, "a source on the right left the direction spectrum empty");
+
+        // The whole point: a source on each side must put the spectrum on that side. The
+        // magnitude is deliberately not checked, because whether the front/back heuristic
+        // calls a given delay ahead or behind is a separate question - and it is
+        // asymmetric, so demanding mirror-image bearings would be testing that instead.
+        if (left >= 0)
+            return new(N3, false, $"a source on the left peaked at {left:F0} deg, expected the spectrum on the left (negative)");
+        if (right <= 0)
+            return new(N3, false, $"a source on the right peaked at {right:F0} deg, expected the spectrum on the right (positive)");
+
+        // A silent frame must leave the spectrum empty, not report bin 0 at -172 deg.
+        var quiet = new SpatialAnalyzer(SpeakerPosition.Stereo, Ch, SampleRate);
+        var quietEvents = new List<AudioEvent>();
+        var silence = new float[1024 * Ch];
+        for (var f = 0; f < 60; f++) quiet.Process(silence.AsSpan(0, 1024 * Ch), 1024, quietEvents);
+        var (qz, ql) = Peak(quiet);
+        if (ql > 0.0005)
+            return new(N3, false, $"digital silence still put {ql:F3} at {qz:F0} deg in the spectrum");
+
+        return new(N3, true,
+            $"a source on the left peaks at {left:F0} deg and on the right at {right:F0} deg; " +
+            "silence reports nothing");
+    }
+
+    private const string N3 = "the stereo spectrum follows the measured bearing, not the channel positions";
+
+    /// <summary>
+    /// A source on the right must not be reported as dead ahead.
+    ///
+    /// The Woodworth ITD model is one-sided - <c>mid + sin(mid)</c> is positive across
+    /// 0..pi/2 - so bisecting on a *negative* delay never advances the lower bound and
+    /// collapses to zero. Every right-side sound was therefore reported as 0 degrees, and
+    /// since 0 draws as "straight ahead" the right side of the screen stayed empty. Only
+    /// the left worked, because a positive delay happens to bisect correctly.
+    ///
+    /// This is the bug behind "I can see a bar on the left side only". It is checked
+    /// against <see cref="StereoItd"/> directly rather than through the whole pipeline, so
+    /// a failure here points at the estimator instead of at the display.
+    /// </summary>
+    private static Result TestStereoItdResolvesBothSides()
+    {
+        // The near ear always hears a source first, so delaying the right channel puts
+        // the source on the left, and vice versa.
+        static double AzimuthFor(int rightDelay)
+        {
+            var itd = new StereoItd(SampleRate, 128);
+            var block = new float[128 * 2];
+            for (var i = 0; i < 20000; i++)
+            {
+                var p = i % 128;
+                block[p * 2 + 0] = Noise(i, 4242);
+                block[p * 2 + 1] = i - rightDelay >= 0 ? Noise(i - rightDelay, 4242) : 0f;
+                if (p == 127) itd.Analyse(block, 128, 2);
+            }
+            return itd.Result.Direction.AzimuthDegrees;
+        }
+
+        var left = AzimuthFor(20);
+        var right = AzimuthFor(-20);
+
+        if (left >= 0)
+            return new(N4, false,
+                $"a source 20 samples late on the right reported {left:F1} deg; the right ear hears it last, so the source is on the left and the bearing must be negative");
+        if (right <= 0)
+            return new(N4, false,
+                $"a source 20 samples early on the right reported {right:F1} deg; the right ear hears it first, so the source is on the right and the bearing must be positive");
+
+        return new(N4, true,
+            $"20 samples of delay reads {left:F0} deg on the left and {right:F0} deg on the right, so both sides resolve");
+    }
+
+    private const string N4 = "stereo ITD resolves a source on either side, not just the left";
 
     private static Result TestSingleSpeaker()
     {

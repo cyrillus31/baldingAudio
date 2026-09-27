@@ -200,7 +200,12 @@ public sealed class StereoItd
     /// </summary>
     private double AzimuthFromItd(double lagSamples)
     {
-        var itd = lagSamples / _sampleRate;
+        // Absolute value, because the model is one-sided: mid + sin(mid) is positive for
+        // every mid in 0..pi/2, so bisecting on a negative delay never advances `lo` and
+        // collapses to zero. That reported every sound on the RIGHT as dead ahead, which
+        // is why only the left side of the screen ever showed a line. The sign is applied
+        // on the way out, by the return below.
+        var itd = Math.Abs(lagSamples) / _sampleRate;
         var aOverC = HeadRadiusMetres / SpeedOfSound;
 
         var lo = 0.0;
