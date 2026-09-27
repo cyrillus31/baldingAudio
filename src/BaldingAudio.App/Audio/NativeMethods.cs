@@ -1,7 +1,9 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 
-namespace BaldingAudio.Core.Audio;
+using BaldingAudio.Core.Audio;
+
+namespace BaldingAudio.App.Audio;
 
 /// <summary>
 /// Plain Win32 entry points needed by the Windows shell.
@@ -29,6 +31,14 @@ internal static class NativeMethods
     internal const int SWP_NOACTIVATE = 0x0010;
     internal const int SWP_SHOWWINDOW = 0x0040;
     internal const int SWP_NOZORDER = 0x0004;
+
+    internal const int SW_HIDE = 0;
+    internal const int SW_SHOWNORMAL = 1;
+    internal const int SW_SHOWNOACTIVATE = 4;
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool ShowWindow(IntPtr hwnd, int nCmdShow);
 
     internal static readonly IntPtr HWND_TOPMOST = new(-1);
 
@@ -201,6 +211,12 @@ internal static class NativeMethods
         [MarshalAs(UnmanagedType.LPWStr)] public string? lpszMenuName;
         [MarshalAs(UnmanagedType.LPWStr)] public string lpszClassName;
     }
+
+    /// <summary>
+    /// Window procedure signature. WNDCLASS stores a raw function pointer, so the
+    /// managed delegate behind it must stay rooted for the process lifetime.
+    /// </summary>
+    internal delegate IntPtr WndProcDelegate(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam);
 
     [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     internal static extern ushort RegisterClass(ref WNDCLASS lpwcx);

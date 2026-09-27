@@ -1,8 +1,9 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using BaldingAudio.Core.Audio;
+using BaldingAudio.App.Audio;
 using BaldingAudio.Core.Overlay;
-using static BaldingAudio.Core.Audio.NativeMethods;
+using static BaldingAudio.App.Audio.NativeMethods;
 
 namespace BaldingAudio.App.Overlay;
 
@@ -47,7 +48,7 @@ public sealed class OverlayWindow : IDisposable
         if (_hwnd != IntPtr.Zero) return;
 
         var className = "baldingAudioOverlay";
-        if (!IsWindowClassRegistered(className)) RegisterClass(className);
+        if (!IsWindowClassRegistered(className)) EnsureClassRegistered(className);
 
         _hwnd = CreateWindowEx(
             WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
@@ -59,22 +60,35 @@ public sealed class OverlayWindow : IDisposable
         if (_hwnd == IntPtr.Zero)
             throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateWindowEx failed for the overlay window.");
 
+        // WS_POPUP alone creates the window hidden. Without this it never composites
+        // and UpdateLayeredWindow silently draws into nothing. SW_SHOWNOACTIVATE
+        // shows it without stealing focus from the game.
+        ShowWindow(_hwnd, SW_SHOWNOACTIVATE);
+
         _buffer = new PixelBuffer(Width, Height);
         CreateGdiSurfaces();
         Present();
     }
+
+    /// <summary>
+    /// The overlay never handles messages: it is a pure compositing surface, so the
+    /// default window procedure is correct. The delegate is held in a static readonly
+    /// field because RegisterClass keeps only the raw pointer to it.
+    /// </summary>
+    private static readonly WndProcDelegate DefWindowProcThunk =
+        (h, msg, w, l) => DefWindowProc(h, msg, w, l);
 
     private static bool _classRegistered;
     private static string _registeredName = string.Empty;
 
     private static bool IsWindowClassRegistered(string name) => _classRegistered && _registeredName == name;
 
-    private static void RegisterClass(string name)
+    private static void EnsureClassRegistered(string name)
     {
         var wc = new WNDCLASS
         {
             style = 0,
-            lpfnWndProc = DefWindowProc,
+            lpfnWndProc = Marshal.GetFunctionPointerForDelegate(DefWindowProcThunk),
             hInstance = GetModuleHandle(null),
             lpszClassName = name,
         };

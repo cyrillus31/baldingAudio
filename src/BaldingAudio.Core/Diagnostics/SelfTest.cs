@@ -1,5 +1,6 @@
 using BaldingAudio.Core.Audio;
 using BaldingAudio.Core.Config;
+using BaldingAudio.Core.Overlay;
 
 namespace BaldingAudio.Core.Diagnostics;
 
@@ -27,6 +28,10 @@ public static class SelfTest
             TestLoudnessOrdering(),
             TestFrontBackResolved(),
             TestSilenceProducesNothing(),
+            TestCompassMapsBearingsToBorder(),
+            TestLinesStaySmall(),
+            TestLineFollowsAMovingSound(),
+            TestLineFallsWhenSoundStops(),
         };
         foreach (var r in results)
             log?.Invoke($"  [{(r.Passed ? "PASS" : "FAIL")}] {r.Name}: {r.Detail}");
@@ -173,5 +178,169 @@ public static class SelfTest
         var events = new List<AudioEvent>();
         for (var i = 0; i < 200; i++) a.Process(block, 1024, events);
         return new("silence produces no events", events.Count == 0, $"{events.Count} events from digital silence");
+    }
+
+    /// <summary>
+    /// The display is a compass on the screen border: dead ahead must be the top edge,
+    /// behind must be the bottom edge, and the two must be at the same height, so that
+    /// "higher on the screen" and "further from the bottom" mean the same thing.
+    /// </summary>
+    private static Result TestCompassMapsBearingsToBorder()
+    {
+        const int W = 2560, H = 1440;
+        var s = OverlayStyle.Default();
+        var inset = s.LineThicknessFraction * Math.Min(W, H) * 0.5;
+
+        static (double x, double y) At(int w, int h, double az, double inset)
+        {
+            OverlayLayout.BorderAnchor(w, h, az, inset, out var x, out var y, out _, out _);
+            return (x, y);
+        }
+
+        var ahead = At(W, H, 0, inset);
+        var right = At(W, H, 90, inset);
+        var behind = At(W, H, 180, inset);
+        var left = At(W, H, -90, inset);
+
+        if (ahead.y > inset + 4) return new(N, false, $"dead ahead landed at y={ahead.y:F0}, expected the top edge");
+        if (behind.y < H - inset - 4) return new(N, false, $"behind landed at y={behind.y:F0}, expected the bottom edge");
+        if (right.x < W - inset - 4) return new(N, false, $"right landed at x={right.x:F0}, expected the right edge");
+        if (left.x > inset + 4) return new(N, false, $"left landed at x={left.x:F0}, expected the left edge");
+
+        // Left and right are the mirror of each other, and front and back are too.
+        if (Math.Abs(right.y - left.y) > 1) return new(N, false, $"left/right not mirrored: y={left.y:F0} vs {right.y:F0}");
+        if (Math.Abs(ahead.x - behind.x) > 1) return new(N, false, $"front/back not aligned: x={ahead.x:F0} vs {behind.x:F0}");
+
+        // Anything at all should be inside the screen, or it would be clipped.
+        for (var az = -180.0; az <= 180.0; az += 5)
+        {
+            var p = At(W, H, az, inset);
+            if (p.x < 0 || p.x > W || p.y < 0 || p.y > H)
+                return new(N, false, $"azimuth {az:F0} landed outside the screen at ({p.x:F0},{p.y:F0})");
+        }
+
+        return new(N, true,
+            $"front y={ahead.y:F0}, rear y={behind.y:F0}, right x={right.x:F0}, left x={left.x:F0}; all 73 bearings on-screen");
+    }
+
+    private const string N = "compass maps bearings onto the screen border";
+
+    /// <summary>
+    /// A line must never grow beyond a fraction of the screen, because the whole point
+    /// is that it stays in peripheral vision.
+    /// </summary>
+    private static Result TestLinesStaySmall()
+    {
+        const int W = 2560, H = 1440;
+        var s = OverlayStyle.Default();
+        var style = OverlayStyle.Default();
+        style.MaxLengthFraction = s.MaxLengthFraction;
+        style.MinLengthFraction = s.MinLengthFraction;
+        style.LineThicknessFraction = s.LineThicknessFraction;
+
+        var full = new List<AudioEvent>
+        {
+            new(new Direction(0, 0), 1.0, 0, SoundClass.Gunshot, 1, 1, 1, 0),
+        };
+        var lines = OverlayLayout.BuildLines(full, W, H, style);
+        if (lines.Count != 1) return new("lines stay small", false, $"expected 1 line, got {lines.Count}");
+
+        var l = lines[0];
+        var limit = W / 8.0;
+        if (l.Length > limit + 0.5)
+            return new("lines stay small", false, $"loudest line is {l.Length:F0}px, limit is {limit:F0}px (1/8 of width)");
+
+        return new("lines stay small", true, $"loudest line {l.Length:F0}px, thickness {l.Thickness:F0}px, limit {limit:F0}px");
+    }
+
+    /// <summary>
+    /// The behaviour the user asked for by name: a sound moving from the left to the
+    /// right should make the line on the left get shorter while the line on the right
+    /// gets longer, rather than the line blinking out and a new one blinking in.
+    /// </summary>
+    private static Result TestLineFollowsAMovingSound()
+    {
+        var tracker = new EventTracker();
+        var spectrum = new DirectionSpectrum();
+
+        // A single cue starting hard left, loud.
+        tracker.Push(new AudioEvent(new Direction(-70, 0), 0.8, -20, SoundClass.Footstep, 1, 1, 1, 0));
+        for (var i = 0; i < 5; i++) { PushLevel(spectrum, -70, 0.8); tracker.Follow(spectrum, 1.0 / 60); tracker.Tick(1.0 / 60); }
+
+        var startAz = tracker.Visible[0].Direction.AzimuthDegrees;
+        var startLen = LengthFor(tracker);
+
+        // Now the same sound walks from -70 degrees through dead ahead to +70.
+        for (var step = 1; step <= 60; step++)
+        {
+            var az = -70 + 140.0 * step / 60.0;
+            spectrum.Clear();
+            PushLevel(spectrum, az, 0.8);
+            tracker.Follow(spectrum, 1.0 / 60);
+            tracker.Tick(1.0 / 60);
+        }
+
+        if (tracker.Visible.Count != 1)
+            return new(N2, false, $"expected the line to stay a single line, got {tracker.Visible.Count}");
+
+        var endAz = tracker.Visible[0].Direction.AzimuthDegrees;
+        var endLen = LengthFor(tracker);
+
+        if (endAz < 50)
+            return new(N2, false, $"line only travelled from {startAz:F0} to {endAz:F0} degrees");
+
+        // The length must have come back down as the source moved away from where it
+        // was, otherwise the left side would stay lit forever.
+        if (endLen >= startLen - 0.02)
+            return new(N2, false, $"length did not shrink while moving: {startLen:F0} -> {endLen:F0}");
+
+        return new(N2, true,
+            $"one line travelled {startAz:F0} to {endAz:F0} degrees, length {startLen:F0} -> {endLen:F0}");
+    }
+
+    private const string N2 = "a moving sound slides one line across the screen";
+
+    private static void PushLevel(DirectionSpectrum s, double azimuth, double level)
+        => s.Add(azimuth, level);
+
+    /// <summary>Line length in pixels for the tracker's current loudest line.</summary>
+    private static double LengthFor(EventTracker tracker)
+    {
+        var best = 0.0;
+        foreach (var e in tracker.Visible) if (e.Level > best) best = e.Level;
+        return OverlayLayout.LengthForLevel(best, 2560, OverlayStyle.Default());
+    }
+
+    /// <summary>
+    /// The level a line is drawn at must track the level measured, not the peak of a
+    /// past event. This is the difference between a meter and a frozen bar.
+    /// </summary>
+    private static Result TestLineFallsWhenSoundStops()
+    {
+        var tracker = new EventTracker();
+        var spectrum = new DirectionSpectrum();
+
+        tracker.Push(new AudioEvent(new Direction(-40, 0), 0.9, -18, SoundClass.Footstep, 1, 1, 1, 0));
+        for (var i = 0; i < 5; i++)
+        {
+            spectrum.Clear();
+            spectrum.Add(-40, 0.9);
+            tracker.Follow(spectrum, 1.0 / 60);
+            tracker.Tick(1.0 / 60);
+        }
+        var loud = tracker.Visible.Count > 0 ? tracker.Visible[0].Level : 0.0;
+
+        // The sound stops: an empty spectrum each frame.
+        for (var i = 0; i < 60; i++)
+        {
+            spectrum.Clear();
+            tracker.Follow(spectrum, 1.0 / 60);
+            tracker.Tick(1.0 / 60);
+        }
+
+        var quiet = tracker.Visible.Count > 0 ? tracker.Visible[0].Level : 0.0;
+        var ok = loud > 0.7 && quiet < 0.02;
+        return new("a line falls away when the sound stops", ok,
+            $"level {loud:F2} while sounding -> {quiet:F2} after one second of silence");
     }
 }

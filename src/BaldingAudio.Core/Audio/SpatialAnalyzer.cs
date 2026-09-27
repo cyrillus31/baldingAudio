@@ -103,6 +103,12 @@ public sealed class SpatialAnalyzer
     public int SuppressedCount { get; private set; }
 
     /// <summary>
+    /// Where sound energy is on this frame. Read it from the capture thread immediately
+    /// after <see cref="Process"/>; the overlay uses it to keep lines moving.
+    /// </summary>
+    public DirectionSpectrum Spectrum { get; } = new();
+
+    /// <summary>
     /// Processes a run of interleaved samples, appending any completed events to
     /// <paramref name="output"/>. Framing is handled internally.
     /// </summary>
@@ -200,6 +206,12 @@ public sealed class SpatialAnalyzer
 
         var totalWeighted = _bandEnergy[0] + 2.0 * _bandEnergy[1] + 1.5 * _bandEnergy[2];
 
+        // Publish the current sound field every frame, not only on onsets, so the
+        // overlay can follow a sound that is moving. Same per-channel energy the
+        // direction estimate uses, so the two cannot disagree.
+        BuildSpectrum();
+
+
         var onOnset = _onset.Update(totalWeighted);
         if (onOnset)
         {
@@ -228,6 +240,26 @@ public sealed class SpatialAnalyzer
         if (_eventSilenceRun <= 0.12) return false;
 
         return CompleteEvent(output);
+    }
+
+    /// <summary>
+    /// Turns this frame's per-channel energy into a spectrum over bearings, using the
+    /// same level mapping as the event's dBFS so that a line's length and an event's
+    /// loudness are directly comparable.
+    /// </summary>
+    private void BuildSpectrum()
+    {
+        Spectrum.Clear();
+        for (var c = 0; c < _channelCount; c++)
+        {
+            var energy = _channelTotal[c];
+            if (energy <= 1e-12) continue;
+            if (!_isDirectional[c]) continue;
+
+            var az = _channelDirection[c]!.Value.AzimuthDegrees;
+            var db = Decibel.FromMeanSquare(energy);
+            Spectrum.Add(az, Decibel.ToUnit(db, _tuning.DisplayFloorDb, _tuning.DisplayCeilingDb, _tuning.LevelExponent));
+        }
     }
 
     private void CapturePeakBandRatios()

@@ -1,6 +1,8 @@
 using System.Runtime.InteropServices;
 
-namespace BaldingAudio.Core.Audio;
+using BaldingAudio.Core.Audio;
+
+namespace BaldingAudio.App.Audio;
 
 // --- WASAPI COM interop ------------------------------------------------------
 // Declarations only. No behaviour here touches any process but our own.

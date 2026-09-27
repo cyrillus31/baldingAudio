@@ -94,22 +94,23 @@ public sealed class AppConfig
         }
     }
 
-    /// <summary>Applies the selected preset's geometry, leaving colours alone.</summary>
+    /// <summary>
+    /// Applies the selected preset's geometry, leaving colours alone.
+    /// Both presets keep lines under a sixth of the screen so they stay peripheral.
+    /// </summary>
     public void ApplyPreset()
     {
         switch (Preset)
         {
             case OverlayLayoutPreset.Compact:
-                Style.EdgeInsetFraction = 0.30;
-                Style.MaxLengthFraction = 0.18;
-                Style.BarThicknessFraction = 0.016;
-                Style.VerticalSpanFraction = 0.46;
+                Style.MaxLengthFraction = 0.085;
+                Style.LineThicknessFraction = 0.007;
+                Style.MinLengthFraction = 0.008;
                 break;
             default:
-                Style.EdgeInsetFraction = 0.045;
-                Style.MaxLengthFraction = 0.30;
-                Style.BarThicknessFraction = 0.016;
-                Style.VerticalSpanFraction = 0.62;
+                Style.MaxLengthFraction = 0.125;
+                Style.LineThicknessFraction = 0.009;
+                Style.MinLengthFraction = 0.010;
                 break;
         }
     }

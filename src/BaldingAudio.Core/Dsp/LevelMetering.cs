@@ -33,6 +33,9 @@ public static class Decibel
         var t = ToUnit(dbfs, floorDb, ceilingDb);
         return Math.Pow(t, exponent);
     }
+
+    /// <summary>Inverse of the default visibility window, for synthesising test cues.</summary>
+    public static double FromUnitLevel(double level) => -72.0 + Math.Clamp(level, 0.0, 1.0) * 56.0;
 }
 
 /// <summary>

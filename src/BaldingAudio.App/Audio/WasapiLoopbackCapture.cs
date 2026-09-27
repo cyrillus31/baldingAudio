@@ -1,6 +1,8 @@
 using System.Runtime.InteropServices;
 
-namespace BaldingAudio.Core.Audio;
+using BaldingAudio.Core.Audio;
+
+namespace BaldingAudio.App.Audio;
 
 /// <summary>Configuration for a loopback capture.</summary>
 public sealed class CaptureOptions

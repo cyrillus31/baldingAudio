@@ -6,7 +6,7 @@ namespace BaldingAudio.Core.Overlay;
 /// Draws the indicator into a <see cref="PixelBuffer"/>.
 ///
 /// Purely a function of (events, style, size), so the same code path is used by the
-/// live overlay and by the headless screenshot tests.
+/// live overlay and by headless screenshot tests.
 /// </summary>
 public sealed class OverlayRenderer
 {
@@ -17,14 +17,9 @@ public sealed class OverlayRenderer
     public OverlayStyle Style => _style;
 
     /// <summary>
-    /// Renders a full frame.
+    /// Renders a full frame. The buffer is cleared first, so a frame with nothing
+    /// sounding is fully transparent and leaves the game completely untouched.
     /// </summary>
-    /// <param name="events">Currently visible cues, normally from an <see cref="EventTracker"/>.</param>
-    /// <param name="buffer">Destination, sized to the target monitor.</param>
-    /// <param name="decal">
-    /// Optional small text drawn bottom-centre (status line). Kept as an injected
-    /// callback so the core library needs no font or GDI dependency.
-    /// </param>
     public void Render(
         IReadOnlyList<AudioEvent> events,
         PixelBuffer buffer,
@@ -32,73 +27,45 @@ public sealed class OverlayRenderer
     {
         buffer.Clear();
 
-        var w = buffer.Width;
-        var h = buffer.Height;
-
-        if (_style.ShowGuideLines) DrawGuides(buffer, w, h);
-        DrawBars(events, buffer, w, h);
-        decal?.Invoke(buffer, w, h);
+        if (events.Count > 0) DrawLines(events, buffer);
+        decal?.Invoke(buffer, buffer.Width, buffer.Height);
     }
 
-    private void DrawGuides(PixelBuffer buffer, int w, int h)
+    private void DrawLines(IReadOnlyList<AudioEvent> events, PixelBuffer buffer)
     {
-        var span = _style.VerticalSpanFraction * h;
-        var top = (h - span) * 0.5;
-        var railX = _style.EdgeInsetFraction * w;
-        var length = _style.MaxLengthFraction * w;
+        var lines = OverlayLayout.BuildLines(events, buffer.Width, buffer.Height, _style);
 
-        foreach (var v in OverlayLayout.GuideLines())
+        foreach (var l in lines)
         {
-            var y = (float)(top + v * span);
-            var alpha = v == 0.0 ? _style.GuideLineAlpha * 1.6 : _style.GuideLineAlpha;
-            var x0 = (float)railX;
-            var x1 = (float)(railX + length);
-            buffer.FillHorizontalLine(x0 * 0.6f, x1, y, 1.0f, _style.GuideLine, alpha);
-            buffer.FillHorizontalLine(w - x1, w - x0 * 0.6f, y, 1.0f, _style.GuideLine, alpha);
-        }
-    }
+            if (l.Alpha <= 0.004) continue;
 
-    private void DrawBars(IReadOnlyList<AudioEvent> events, PixelBuffer buffer, int w, int h)
-    {
-        var bars = OverlayLayout.BuildBars(events, w, h, _style);
-        foreach (var b in bars)
-        {
-            if (b.Alpha <= 0.004) continue;
-            var height = (float)b.Height;
-            var radius = height * 0.5f;
-            var width = (float)b.Width;
+            var ax = (float)l.X;
+            var ay = (float)l.Y;
+            var dx = (float)l.Dx;
+            var dy = (float)l.Dy;
+            var radius = (float)(l.Thickness * 0.5);
+            var length = (float)l.Length;
 
-            // A bright leading cap, so the direction of travel is unambiguous even
-            // when the fade makes the far end of the bar faint.
-            if (b.X < w * 0.5)
-                buffer.FillRoundedRectFadingRight((float)b.X, (float)b.Y, width, height, radius, b.Colour, b.Alpha);
-            else
-                buffer.FillRoundedRectFadingLeft((float)b.X, (float)b.Y, width, height, radius, b.Colour, b.Alpha);
+            var tipX = ax + dx * length;
+            var tipY = ay + dy * length;
 
-            DrawCap(buffer, b, h);
-        }
-    }
+            // The body: brightest at the tip, dimmer where it meets the screen border,
+            // so the line reads as reaching in from the edge.
+            buffer.FillCapsule(
+                ax, ay, tipX, tipY, radius, l.Colour, l.Alpha,
+                alphaAtStart: (float)_style.BorderFade,
+                alphaAtEnd: 1.0f);
 
-    private void DrawCap(PixelBuffer buffer, BarGeometry b, int screenHeight)
-    {
-        var height = (float)b.Height;
-        var capThickness = (float)(b.Height * 0.16);
-        var cap = b.Colour.WithAlpha(255);
+            if (!_style.ShowTipCap) continue;
 
-        if (b.X < buffer.Width * 0.5)
-        {
-            // Cap sits at the tip of the bar, on the centre-facing side.
-            var x = (float)(b.X + b.Width - capThickness);
-            buffer.FillRoundedRect(
-                x, (float)b.Y + height * 0.18f, capThickness, height * 0.64f,
-                capThickness * 0.5f, cap, b.Alpha);
-        }
-        else
-        {
-            var x = (float)b.X;
-            buffer.FillRoundedRect(
-                x, (float)b.Y + height * 0.18f, capThickness, height * 0.64f,
-                capThickness * 0.5f, cap, b.Alpha);
+            // A short, brighter cap at the inner end. On a 1/8-screen line this is a few
+            // dozen pixels, which is what makes the reach readable at a glance.
+            var capLength = (float)(length * _style.TipCapFraction);
+            var capStartX = tipX - dx * capLength;
+            var capStartY = tipY - dy * capLength;
+            buffer.FillCapsule(
+                capStartX, capStartY, tipX, tipY, radius,
+                l.Colour.WithAlpha(255), l.Alpha, alphaAtStart: 0.75f, alphaAtEnd: 1.0f);
         }
     }
 }

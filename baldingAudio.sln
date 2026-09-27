@@ -1,0 +1,34 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{4799F039-9304-4049-8641-27C619CE5AEE}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BaldingAudio.Core", "src\BaldingAudio.Core\BaldingAudio.Core.csproj", "{093179C1-209C-44FE-A745-19535CE167FB}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BaldingAudio.App", "src\BaldingAudio.App\BaldingAudio.App.csproj", "{6EE9E6CF-BBFE-4511-AAEB-A42FE9B7B60B}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{093179C1-209C-44FE-A745-19535CE167FB}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{093179C1-209C-44FE-A745-19535CE167FB}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{093179C1-209C-44FE-A745-19535CE167FB}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{093179C1-209C-44FE-A745-19535CE167FB}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6EE9E6CF-BBFE-4511-AAEB-A42FE9B7B60B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6EE9E6CF-BBFE-4511-AAEB-A42FE9B7B60B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6EE9E6CF-BBFE-4511-AAEB-A42FE9B7B60B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6EE9E6CF-BBFE-4511-AAEB-A42FE9B7B60B}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{093179C1-209C-44FE-A745-19535CE167FB} = {4799F039-9304-4049-8641-27C619CE5AEE}
+		{6EE9E6CF-BBFE-4511-AAEB-A42FE9B7B60B} = {4799F039-9304-4049-8641-27C619CE5AEE}
+	EndGlobalSection
+EndGlobal

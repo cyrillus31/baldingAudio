@@ -24,32 +24,36 @@ public sealed class Biquad
         var cosw = Math.Cos(w0);
         var sinw = Math.Sin(w0);
         var alpha = sinw / (2.0 * q);
-        var a0 = 1.0 + alpha;
         var gain = Math.Pow(10.0, gainDb / 20.0);
 
-        double b0, b1, b2, a1, a2;
+        double b0, b1, b2, a0, a1, a2;
         switch (kind)
         {
             case BiquadKind.LowPass:
                 b0 = (1 - cosw) / 2; b1 = 1 - cosw; b2 = (1 - cosw) / 2;
+                a0 = 1 + alpha;
                 a1 = -2 * cosw; a2 = 1 - alpha;
                 break;
             case BiquadKind.HighPass:
                 b0 = (1 + cosw) / 2; b1 = -(1 + cosw); b2 = (1 + cosw) / 2;
+                a0 = 1 + alpha;
                 a1 = -2 * cosw; a2 = 1 - alpha;
                 break;
             case BiquadKind.BandPassConstantPeakGain:
                 b0 = alpha; b1 = 0; b2 = -alpha;
+                a0 = 1 + alpha;
                 a1 = -2 * cosw; a2 = 1 - alpha;
                 break;
             case BiquadKind.BandPassZeroDelay:
                 b0 = sinw / 2; b1 = 0; b2 = -sinw / 2;
+                a0 = 1 + alpha;
                 a1 = -2 * cosw; a2 = 1 - alpha;
                 break;
             case BiquadKind.Peak:
             {
                 var A = Math.Pow(10.0, gainDb / 40.0);
                 b0 = 1 + alpha * A; b1 = -2 * cosw; b2 = 1 - alpha * A;
+                a0 = 1 + alpha / A;
                 a1 = -2 * cosw; a2 = 1 - alpha / A;
                 break;
             }
@@ -81,8 +85,14 @@ public sealed class Biquad
                 throw new ArgumentOutOfRangeException(nameof(kind));
         }
 
-        _b0 = b0 * gain; _b1 = b1 * gain; _b2 = b2 * gain;
-        _a1 = a1; _a2 = a2;
+        // Normalising by a0 is what keeps the filter stable. Skipping it leaves the
+        // denominator roots outside the unit circle for low normalised frequencies
+        // and the filter self-oscillates up to infinity within a few thousand samples.
+        _b0 = b0 * gain / a0;
+        _b1 = b1 * gain / a0;
+        _b2 = b2 * gain / a0;
+        _a1 = a1 / a0;
+        _a2 = a2 / a0;
     }
 
     public double Process(double x)
@@ -119,14 +129,27 @@ public sealed class BandPass
 
     public BandPass(double sampleRate, double lowHz, double highHz)
     {
-        // Split the band between the two sections; each is a zero-delay band-pass
-        // placed at the geometric centre of its sub-band. The sub-band centres are
-        // chosen so the cascade approximates a flat response across [lowHz, highHz].
-        var g0 = Math.Sqrt(lowHz * Math.Sqrt(highHz));
-        var g1 = Math.Sqrt(highHz * g0);
-        _s1.Configure(BiquadKind.BandPassZeroDelay, sampleRate, g0, 0.707);
-        _s2.Configure(BiquadKind.BandPassZeroDelay, sampleRate, g1, 0.707);
+        // Split the requested range at its geometric mean, then place each section at
+        // the geometric centre of its own half with Q matched to that half's width.
+        // Two sections roughly 2x apart keep the combined -3 dB points near the
+        // requested edges without the deep dip a single narrow section would leave.
+        var mid = Math.Sqrt(lowHz * highHz);
+
+        var c1 = Math.Sqrt(lowHz * mid);
+        var q1 = ClampQ(c1 / Math.Max(1.0, mid - lowHz));
+
+        var c2 = Math.Sqrt(mid * highHz);
+        var q2 = ClampQ(c2 / Math.Max(1.0, highHz - mid));
+
+        _s1.Configure(BiquadKind.BandPassZeroDelay, sampleRate, c1, q1);
+        _s2.Configure(BiquadKind.BandPassZeroDelay, sampleRate, c2, q2);
     }
+
+    /// <summary>
+    /// Bounds Q. The high side matters: a very high Q pushes the poles near the unit
+    /// circle, and the lowest band starts close enough to DC to be sensitive to it.
+    /// </summary>
+    private static double ClampQ(double q) => Math.Clamp(q, 0.4, 4.0);
 
     public void Reset() { _s1.Reset(); _s2.Reset(); }
 

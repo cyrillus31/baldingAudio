@@ -149,7 +149,64 @@ public sealed class PixelBuffer
         }
     }
 
-    /// <summary>Horizontal hairline with vertical anti-aliasing, used for the guide lines.</summary>
+    /// <summary>
+    /// Anti-aliased capsule: every point within <paramref name="radius"/> of the
+    /// segment (x0,y0)-(x1,y1). This is the shape a direction indicator needs, because
+    /// the lines point inward from the screen border at every angle, and an
+    /// axis-aligned rounded rectangle cannot express that.
+    ///
+    /// Alpha ramps linearly from <paramref name="alphaAtStart"/> to
+    /// <paramref name="alphaAtEnd"/> along the segment, so the far end can be the
+    /// brightest part and the line reads as reaching in from the border.
+    /// </summary>
+    public void FillCapsule(
+        float x0, float y0, float x1, float y1,
+        float radius,
+        Rgba colour,
+        double alphaScale = 1.0,
+        float alphaAtStart = 0.45f,
+        float alphaAtEnd = 1.0f)
+    {
+        if (radius <= 0) return;
+
+        var vx = x1 - x0;
+        var vy = y1 - y0;
+        var lengthSq = vx * vx + vy * vy;
+
+        var minX = Math.Max(0, (int)Math.Floor(Math.Min(x0, x1) - radius) - 1);
+        var maxX = Math.Min(Width - 1, (int)Math.Ceiling(Math.Max(x0, x1) + radius) + 1);
+        var minY = Math.Max(0, (int)Math.Floor(Math.Min(y0, y1) - radius) - 1);
+        var maxY = Math.Min(Height - 1, (int)Math.Ceiling(Math.Max(y0, y1) + radius) + 1);
+        if (minX > maxX || minY > maxY) return;
+
+        for (var py = minY; py <= maxY; py++)
+        {
+            var row = py * Width;
+            var fy = py + 0.5f;
+            for (var px = minX; px <= maxX; px++)
+            {
+                var fx = px + 0.5f;
+
+                // Distance from the pixel centre to the segment, not to the infinite
+                // line: clamping t to 0..1 is what gives the rounded end caps.
+                float t = lengthSq > 1e-6f
+                    ? Math.Clamp(((fx - x0) * vx + (fy - y0) * vy) / lengthSq, 0f, 1f)
+                    : 0f;
+
+                var dx = fx - (x0 + vx * t);
+                var dy = fy - (y0 + vy * t);
+                var d = MathF.Sqrt(dx * dx + dy * dy) - radius;
+
+                var coverage = Math.Clamp(0.5f - d, 0f, 1f);
+                if (coverage <= 0f) continue;
+
+                var fade = alphaAtStart + (alphaAtEnd - alphaAtStart) * t;
+                Blend(row + px, Pack(colour, alphaScale * coverage * fade));
+            }
+        }
+    }
+
+    /// <summary>Horizontal hairline with vertical anti-aliasing.</summary>
     public void FillHorizontalLine(float x0, float x1, float y, float thickness, Rgba colour, double alphaScale = 1.0)
     {
         var minX = Math.Max(0, (int)Math.Floor(Math.Min(x0, x1)));
