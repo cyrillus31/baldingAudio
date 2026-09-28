@@ -235,19 +235,22 @@ public sealed class AppHost : IDisposable
             ? $"{spectrum!.AzimuthOf(loudestBin),5:F0}° level {loudest,5:F3}"
             : "silent          ";
 
-        // Say whether the loudest bearing had a side at all. A cue near dead-ahead has
-        // none - the bearing is a couple of degrees of noise and its sign is not a
-        // measurement - and it is drawn from both edges. Without this the log shows a
-        // confident-looking "loudest -8 deg" for a cue that is deliberately on both
-        // sides, which is exactly the reading that sent the diagnosis of the music
-        // report down the wrong path twice.
-        var side = !spectrum?.Ambiguous ?? true;
-        var sided = loudest <= 0.0005 ? "" : side ? "side known" : "BOTH SIDES";
+        // Report the balance, because that is what the edge and the bar length are now
+        // read from, and because a signed number is the only way to tell "centred, so
+        // nothing is drawn" apart from "quiet". Printing a bare bearing here is what
+        // made a cue that is deliberately invisible look like a measurement.
+        var balance = loudest <= 0.0005
+            ? ""
+            : spectrum?.Balance is double b
+                ? Math.Abs(b) < _config.Style.BalanceFloor
+                    ? "centred, hidden"
+                    : $"{(b < 0 ? "L" : "R")} {Math.Abs(b):F2}"
+                : "multichannel";
 
         Log.Info(
             $"{mode} | {captureState} | peak {_lastDbfs,6:F0} dBFS | floor {_lastNoiseFloorDb,6:F0} dBFS | " +
             $"events {Interlocked.Read(ref _eventsSeen)} | lines {_tracker.Visible.Count} | " +
-            $"loudest {where} | {sided,-10} | {_framesDrawn} frames");
+            $"loudest {where} | bal {balance,-14} | {_framesDrawn} frames");
 
         WarnIfCaptureUnhealthy();
     }

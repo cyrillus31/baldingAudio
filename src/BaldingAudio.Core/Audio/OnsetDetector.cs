@@ -55,17 +55,19 @@ public readonly record struct AudioEvent(
     double Timestamp)
 {
     /// <summary>
-    /// True when the side of this sound is not known, only its distance from ahead.
+    /// How lopsided this sound is between the two channels: -1 all left, +1 all right,
+    /// 0 an even split. Null in multichannel mode, where each speaker has a real side.
     ///
     /// <para>
-    /// Set on a two-channel endpoint, where a source near dead-ahead has no measurable
-    /// side: the lateral angle there is a couple of degrees of noise, and its sign is
-    /// not a measurement. The display draws such a cue on both edges rather than
-    /// choosing one, because choosing one is a coin toss presented as a fact. Always
-    /// false in multichannel mode, where each speaker has a real bearing.
+    /// This is what the bar length and the edge are both read from on a two-channel
+    /// endpoint. The overlay used to draw a cue whose side could not be read on both
+    /// edges at once, which kept every line lit on both sides at equal intensity and
+    /// threw the side away - the user saw a grenade to the right produce no
+    /// difference at all. Reading the imbalance directly says the same thing without
+    /// inventing a side, and a centred sound produces no line, which is the truth.
     /// </para>
     /// </summary>
-    public bool Ambiguous { get; init; }
+    public double? Balance { get; init; }
 }
 
 /// <summary>

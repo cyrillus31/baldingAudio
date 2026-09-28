@@ -62,25 +62,57 @@ created it. `SpectrumExchange` double-buffers the direction spectrum between the
 Two side scales. Lines run **inward from the left and right edges**, and height on
 screen means front/behind.
 
-- The **sign of the azimuth** picks the edge: negative starts at the left edge and runs
-  right, positive starts at the right edge and runs left. Exactly 0 (dead ahead) goes
-  right, having no side of its own.
 - **|azimuth| picks the height**: 0° = top of the band (straight ahead), 90° = middle
   (to the side), 180° = bottom (behind). Closer to the top is more in front, closer to
   the bottom is more behind.
 - **Every line is horizontal.** Never anchored to the top or bottom edge, so nothing
   projects inward from those.
-- **Length = loudness**, capped at 1/8 of screen width.
 - **Thickness is constant**, so it reads as a line.
-- **Nothing is drawn when nothing is sounding.**
 - The band is inset by `FieldInsetFraction`, so the extremes sit clear of the top and
   bottom edges. On 2560×1440: front y=193, side y=720, behind y=1247.
 
-Both halves of the direction survive. This encodes a bearing as (sign, |azimuth|) rather
-than (sin, cos) — a different decomposition, not a coarser one.
+The **geometry** is confirmed good — "front at top feels right". What a line *means* is
+different on a two-channel endpoint, and this is the part to read before changing
+anything.
 
-The user has watched three designs run and rejected two. The current one is confirmed
-good: "front at top feels right". Trust it over anything written earlier.
+### Stereo: the bar is the difference between the ears
+
+On a stereo endpoint both the **edge** and the **length** come from one measured
+quantity, the *balance*: the difference in energy between the two channels, −1 for all
+left through +1 for all right.
+
+- The **sign of the balance** picks the edge, not the sign of the bearing. A negative
+  balance draws from the left edge, positive from the right.
+- **Length = |balance|**, from **zero**, capped at 1/8 of screen width. It does not use
+  `MinLengthFraction`; that floor exists so a faint-but-drawn line is still visible, and
+  here a short bar means "barely off to one side", so a floor would put a stub on both
+  edges for every centred sound.
+- **Below `BalanceFloor` (0.10) nothing is drawn at all.** Roughly 0.9 dB between the
+  ears, below what most listeners can localise on purpose.
+- **Loudness is carried by brightness, not length**, so length and alpha answer two
+  different questions and neither is wasted.
+
+The balance is measured **per frequency band**, scoring each band by its energy times
+how far from even it is, and reporting the winner. Without that the app measures the
+whole mix: balanced music plus a footstep to the right averages out to nothing and no
+line appears, which is the case the user specifically asked for.
+
+A consequence worth stating out loud: **a sound dead ahead or directly behind now draws
+nothing**, because neither has a left/right difference. That includes a gunshot in your
+face. The user asked for exactly this — "a grenade in my face should show nothing or
+close to it" — and it is why loudness had to move to brightness.
+
+Multichannel is unchanged: each speaker has a real bearing, so the sign of the bearing
+is a measurement and length still means loudness. `Balance` is null there, and that null
+is the discriminator between the two models — not interchangeable with 0, because an
+even stereo mix is 0 and must draw nothing.
+
+The earlier model drew a cue whose side was unreadable on **both** edges at once. It
+looked honest and was not: the user reported "identical intensities on both sides, and a
+grenade to the right showed no difference". Mirroring threw the side away.
+
+The user has watched four designs run and rejected two. The current geometry is
+confirmed good: "front at top feels right". Trust it over anything written earlier.
 
 ### Rejected designs, and why
 

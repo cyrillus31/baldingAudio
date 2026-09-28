@@ -51,6 +51,12 @@ public sealed class SpatialAnalyzer
     /// </summary>
     private bool _stereoAmbiguous;
 
+    /// <summary>
+    /// Left-versus-right energy imbalance of the most lopsided band, -1 to +1.
+    /// Read by BuildSpectrum and Emit; see <see cref="MostLopsidedBand"/>.
+    /// </summary>
+    private double _stereoBalance;
+
     private readonly double[] _bandEnergy = new double[BandCount];
     private readonly double[][] _channelBand;
     private readonly double[] _channelTotal = new double[MaxChannels];
@@ -223,6 +229,7 @@ public sealed class SpatialAnalyzer
         {
             _stereoAzimuth = _stereo.Result.Direction.AzimuthDegrees;
             _stereoAmbiguous = _stereo.LastAmbiguous;
+            _stereoBalance = MostLopsidedBand();
         }
 
         // Publish the current sound field every frame, not only on onsets, so the
@@ -307,7 +314,7 @@ public sealed class SpatialAnalyzer
             if (level > 0)
             {
                 Spectrum.Add(_stereoAzimuth, level);
-                Spectrum.Ambiguous = _stereoAmbiguous;
+                Spectrum.Balance = _stereoBalance;
             }
             return;
         }
@@ -322,6 +329,50 @@ public sealed class SpatialAnalyzer
             var db = Decibel.FromMeanSquare(energy);
             Spectrum.Add(az, Decibel.ToUnit(db, _tuning.DisplayFloorDb, _tuning.DisplayCeilingDb, _tuning.LevelExponent));
         }
+    }
+
+    /// <summary>
+    /// Left-versus-right energy imbalance of whichever band is the most lopsided, -1
+    /// (all left) to +1 (all right).
+    ///
+    /// <para>
+    /// Per band, not for the whole mix, and that is the difference between the display
+    /// working and being useless in a game. The app can only measure the mix, so
+    /// balanced music plus a footstep to the right averages out to nearly nothing and
+    /// no line appears. Scoring each band by its energy times how far from even it is
+    /// picks the footstep out of the music: the music's bands score near zero, and the
+    /// footstep's scores highest. Weighting by energy is what keeps a near-silent
+    /// band that happens to be perfectly one-sided from winning on a fluke.
+    /// </para>
+    ///
+    /// <para>
+    /// Polarity is the whole ballgame here. Right ear louder is a positive number,
+    /// and the layout maps a positive bearing to the right edge, so the sign must not
+    /// be inverted anywhere in between or every sound appears on the wrong side -
+    /// the failure that is invisible in a screenshot and obvious in a game.
+    /// </para>
+    /// </summary>
+    private double MostLopsidedBand()
+    {
+        double bestScore = 0.0;
+        var best = 0.0;
+
+        for (var b = 0; b < BandCount; b++)
+        {
+            var l = _channelBand[0][b];
+            var r = _channelBand[1][b];
+            var sum = l + r;
+            if (sum <= 1e-12) continue;
+
+            var balance = (r - l) / sum;
+            var score = sum * Math.Abs(balance);
+            if (score <= bestScore) continue;
+
+            bestScore = score;
+            best = balance;
+        }
+
+        return best;
     }
 
     private void CapturePeakBandRatios()
@@ -378,9 +429,9 @@ public sealed class SpatialAnalyzer
             _eventDistanceConfidence,
             _eventStartClock)
         {
-            // Only meaningful on a two-channel endpoint, and false everywhere else,
+            // Only meaningful on a two-channel endpoint, and null everywhere else,
             // because each multichannel speaker really does have a side.
-            Ambiguous = _useStereo && _stereoAmbiguous,
+            Balance = _useStereo ? _stereoBalance : null,
         });
         return true;
     }

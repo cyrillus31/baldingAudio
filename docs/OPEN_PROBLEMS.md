@@ -12,6 +12,78 @@ rejected.
 
 ---
 
+## Third field round, 2026-09-28 — the display model itself was wrong
+
+> "it works fine in terms that it shows on both sides and an overlay stays consistently on
+> top of the game. we need to commit and push this version. but the problem is that it's
+> just too much clutter. i see the waves on both left and right sides at the same time
+> with identical intesities. i tried blowing up granades on the right side of me and did
+> not see any difference."
+>
+> "if there's a granade that blows up in my face i imagine there won't be much of a
+> difference in a souond between my left and right channles and therefore nothing or
+> close to nothing should be reflected by the app on the overlay"
+
+Both symptoms had one cause, and it was fault 5's fix. Drawing a cue with an unreadable
+side on **both** edges at once was meant to be honest, and it was not: it throws the
+side away and lights both edges at equal intensity for every sound the estimator is
+unsure about. A grenade to the right and a grenade in your face became the same picture.
+The user reported exactly that, and reported it as two separate problems.
+
+### 7. A bar now means "off to one side, and this is how far off" — CHANGED
+
+Not a new design so much as the honest reading of what a two-channel endpoint can
+measure. The old model drew a *sound* and pointed at where it was. On stereo the only
+reliable measurement is the difference in level between the ears, so the bar now shows
+that difference and nothing else:
+
+- **Which edge**: the sign of the balance between the channels.
+- **Length**: how lopsided it is, from **zero**.
+- **Below a small floor: nothing at all.** An even mix is in front of you.
+- **Loudness moved to brightness**, so length and alpha answer different questions.
+- Measured **per frequency band**, so a right-panned footstep shows through balanced
+  music. Measuring the whole mix averages the two together and shows nothing.
+
+**The cost, stated plainly:** a sound dead ahead or directly behind now draws nothing,
+because neither has a left/right difference. A gunshot in your face is invisible. The
+user asked for this explicitly and it is the correct behaviour for the measurement
+being made, but it is a real loss and not a rounding error.
+
+**The trade that was refused:** the user considered remapping the height axis to lateral
+angle so a stereo endpoint would use the full band. They rejected it. The height axis is
+untouched, "front at top" still holds, and the geometry is unchanged.
+
+### 8. Clutter was measured, not guessed
+
+> "i havent noticed any intesity increased at the granade blow up cuz there was alwasy
+> clutter even when it was relatively silent"
+
+The display floor is −72 dBFS. Over 6415 heartbeats from the field log:
+
+| Floor | Heartbeats with sound above it |
+| --- | --- |
+| −72 dBFS (current) | **97.8%** |
+| −50 dBFS | 78.6% |
+| −45 dBFS | 62.5% |
+| −35 dBFS | 46.9% |
+| −30 dBFS | 32.5% |
+
+So the level gate was admitting almost everything and filtering essentially nothing.
+Median event peak is −37 dBFS and the adaptive floor sits at −90 for most of a session,
+which means the floor is not tracking and a relative gate is not available either.
+
+**This is deliberately not changed in the same commit as fault 7.** Raising the level
+gate is the obvious lever and the wrong first move: it trades directly against the
+original complaint that quiet distant sounds did not show. The balance gate added in
+fault 7 is the principled filter — it removes clutter that is *balanced* (music, ambient,
+anything in front of you) without touching the level at all, which is why it should be
+measured in a real game first.
+
+`Style.BalanceFloor` and `Tuning.DisplayFloorDb` are both live in
+`%APPDATA%\baldingAudio\config.json`, so neither needs a rebuild to tune.
+
+---
+
 ## Second field round, 2026-09-28 — three more faults, all fixed
 
 The three problems above were closed by reasoning about the log, and three of the

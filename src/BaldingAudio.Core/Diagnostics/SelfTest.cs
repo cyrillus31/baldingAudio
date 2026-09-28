@@ -40,7 +40,9 @@ public static partial class SelfTest
             TestFrozenOverlayKeepsItsLines(),
             TestSpectrumCanStartALine(),
             TestCentredStereoSourceHasNoSide(),
-            TestAmbiguousCueIsDrawnOnBothEdges(),
+            TestBarLengthAndEdgeComeFromTheImbalance(),
+            TestMeasuredImbalanceHasTheRightSign(),
+            TestLoudCentredSoundDoesNotHideASideSound(),
         };
         foreach (var r in results)
             log?.Invoke($"  [{(r.Passed ? "PASS" : "FAIL")}] {r.Name}: {r.Detail}");

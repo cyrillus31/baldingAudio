@@ -31,7 +31,7 @@ internal static class AppSelfCheck
         var results = new List<Check>
         {
             CheckPublishDeliversTheCurrentFrame(),
-            CheckAmbiguitySurvivesTheHandoff(),
+            CheckBalanceSurvivesTheHandoff(),
             CheckSnapshotIsStableWhileTheCaptureThreadRuns(),
             CheckHealthyIterationDoesNotReopen(),
             CheckSilenceCanNeverCauseAReopen(),
@@ -127,57 +127,62 @@ internal static class AppSelfCheck
     /// snapshot is internally consistent.
     /// </summary>
     private const string AmbiguityName =
-        "the 'side unknown' flag survives the capture-to-UI handoff";
+        "the measured left/right imbalance survives the capture-to-UI handoff";
 
     /// <summary>
-    /// The ambiguity flag has to arrive at the UI thread, and it is easy to leave it
-    /// behind.
+    /// The balance has to arrive at the UI thread, and it is easy to leave it behind.
     ///
     /// <para>
     /// <c>Snapshot</c> rebuilds a fresh <see cref="DirectionSpectrum"/> from the bins
-    /// alone, so a flag set on the capture thread's instance arrives false. The headless
-    /// checks publish and read the same object, so they would not notice: the overlay
-    /// would keep drawing a cue with no known side on one arbitrary edge while every
-    /// check stayed green. That is precisely the "a check that cannot fail" trap, and it
-    /// is the whole reason this check lives next to the exchange rather than in Core.
+    /// alone, so a value set on the capture thread's instance arrives null. The headless
+    /// checks publish and read through the same object, so they would not notice: the
+    /// overlay would quietly fall back to the loudness-length model - a different
+    /// display, with a bar on both edges for a centred sound - while every check stayed
+    /// green. That is precisely the "a check that cannot fail" trap, and it is the whole
+    /// reason this check lives next to the exchange rather than in Core.
     /// </para>
     /// </summary>
-    private static Check CheckAmbiguitySurvivesTheHandoff()
+    private static Check CheckBalanceSurvivesTheHandoff()
     {
         var exchange = new SpectrumExchange();
         var spectrum = new DirectionSpectrum(exchange.Bins);
 
-        // A source with no knowable side: loud, and flagged.
-        spectrum.Clear();
-        spectrum.Add(-6, 0.8);
-        spectrum.Ambiguous = true;
-        exchange.Publish(spectrum);
-
-        var flagged = exchange.Snapshot();
-        if (flagged is null)
-            return new(AmbiguityName, false, "nothing was published by the first Publish");
-        if (!flagged.Ambiguous)
-            return new(AmbiguityName, false,
-                "a frame published as having no known side arrived at the UI thread claiming to " +
-                "know its side, so the overlay would draw it on one arbitrary edge");
-
-        // And a frame that DOES know its side must not inherit the flag from the frame
-        // before it, which is the same class of mistake one step later.
+        // Hard to one side: the case the whole display model is built on.
         spectrum.Clear();
         spectrum.Add(-70, 0.8);
-        spectrum.Ambiguous = false;
+        spectrum.Balance = -0.42;
         exchange.Publish(spectrum);
 
-        var decided = exchange.Snapshot();
-        if (decided is null)
-            return new(AmbiguityName, false, "the second Publish did not arrive");
-        if (decided.Ambiguous)
+        var first = exchange.Snapshot();
+        if (first is null)
+            return new(AmbiguityName, false, "nothing was published by the first Publish");
+        if (first.Balance is not double carried)
             return new(AmbiguityName, false,
-                "a frame with a definite side arrived flagged as unknown, so a real sound " +
-                "would be mirrored onto both edges");
+                "a frame published with a balance of -0.42 arrived at the UI thread with none, so the " +
+                "overlay falls back to the multichannel model and draws from loudness instead");
+        if (Math.Abs(carried + 0.42) > 1e-9)
+            return new(AmbiguityName, false,
+                $"a published balance of -0.42 arrived as {carried}, so the edge and the bar length " +
+                "are computed from a different number than the one measured");
+
+        // And a multichannel frame must arrive as null, not inherit the stereo value: a
+        // stale balance on a real 7.1 system would claim a side that each speaker has for
+        // real anyway, and quietly blank them.
+        spectrum.Clear();
+        spectrum.Add(-70, 0.8);
+        spectrum.Balance = null;
+        exchange.Publish(spectrum);
+
+        var multi = exchange.Snapshot();
+        if (multi is null)
+            return new(AmbiguityName, false, "the second Publish did not arrive");
+        if (multi.Balance is not null)
+            return new(AmbiguityName, false,
+                $"a multichannel frame arrived carrying a balance of {multi.Balance:F2} left over from " +
+                "the stereo frame before it, so each speaker would be drawn as an ear imbalance");
 
         return new(AmbiguityName, true,
-            "a frame with no known side arrived flagged, and a frame with a definite side arrived unflagged");
+            "a stereo balance of -0.42 arrived intact, and a multichannel frame arrived with none");
     }
 
     private static Check CheckSnapshotIsStableWhileTheCaptureThreadRuns()

@@ -31,17 +31,19 @@ public sealed class DirectionSpectrum
     public int Bins { get; }
 
     /// <summary>
-    /// True when the bearing(s) in this spectrum have no measurable side.
+    /// How lopsided this frame is between the two channels: -1 for all the energy in
+    /// the left one, +1 for all of it in the right, 0 for an even split.
     ///
     /// <para>
-    /// One flag rather than one per bin, and that is not a simplification: on a
-    /// two-channel endpoint the whole spectrum is a single bearing measured by
-    /// interaural timing, so there is only ever one thing for it to describe. In
-    /// multichannel mode each bin is a real speaker at a real bearing, so it stays
-    /// false and the overlay never mirrors anything.
+    /// Null when there is no left-versus-right to compare - multichannel mode, where
+    /// each speaker really does have a side of its own and the position is not an
+    /// inference at all. That null is the discriminator the overlay uses to pick
+    /// between the two display models, so it is not interchangeable with 0: a
+    /// perfectly even stereo mix is 0 and must draw nothing, while multichannel is
+    /// null and must keep drawing.
     /// </para>
     /// </summary>
-    public bool Ambiguous { get; set; }
+    public double? Balance { get; set; }
 
     /// <summary>Level of each bin, 0..1. Not smoothed; the tracker does that.</summary>
     public double this[int bin] => _levels[bin];
@@ -53,7 +55,7 @@ public sealed class DirectionSpectrum
     public void Clear()
     {
         Array.Clear(_levels);
-        Ambiguous = false;
+        Balance = null;
     }
 
     /// <summary>Overwrites one bin. Used to publish a snapshot taken on another thread.</summary>

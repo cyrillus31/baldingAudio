@@ -51,6 +51,24 @@ public sealed class OverlayStyle
     public double MinLengthFraction { get; set; } = 0.010;
 
     /// <summary>
+    /// Smallest left/right imbalance worth drawing, -1..1. Below this a cue is not off
+    /// to one side, it is simply in front of the player, and drawing it would claim a
+    /// side that isn't there.
+    ///
+    /// <para>
+    /// 0.1 is roughly 0.9 dB between the ears, which is below what most listeners can
+    /// localise even deliberately, let alone mid-firefight. Raise it to cut clutter
+    /// further at the cost of missing sounds that are only slightly off to one side.
+    /// </para>
+    ///
+    /// <para>
+    /// Does not apply in multichannel mode, where a speaker's position is not an
+    /// inference and there is nothing to be uncertain about.
+    /// </para>
+    /// </summary>
+    public double BalanceFloor { get; set; } = 0.10;
+
+    /// <summary>
     /// Blank margin kept between the top and bottom of the screen and the ends of the
     /// side scales, as a fraction of the shorter screen dimension.
     ///
@@ -274,6 +292,25 @@ public static class OverlayLayout
         return minLen + Math.Clamp(level, 0.0, 1.0) * (maxLen - minLen);
     }
 
+    /// <summary>
+    /// Maps a signed left/right imbalance to line length in pixels: 0 at dead even,
+    /// <see cref="OverlayStyle.MaxLengthFraction"/> of the width at fully one-sided.
+    ///
+    /// <para>
+    /// Starts at zero and not at <see cref="OverlayStyle.MinLengthFraction"/>, unlike
+    /// <see cref="LengthForLevel"/>. That minimum length is a legibility floor for a
+    /// line that is being drawn - a faint footstep still has to be a visible dash - but
+    /// here a short bar means "barely off to one side", and giving it a floor would
+    /// turn every centred sound into a stub on both edges, which is the clutter this
+    /// model exists to remove. A sound that is not lopsided draws nothing at all.
+    /// </para>
+    /// </summary>
+    public static double LengthForBalance(double balance, int screenWidth, OverlayStyle style)
+    {
+        var maxLen = style.MaxLengthFraction * screenWidth;
+        return Math.Clamp(Math.Abs(balance), 0.0, 1.0) * maxLen;
+    }
+
     /// <summary>Builds all lines for a set of events at a given screen size.</summary>
     public static List<LineGeometry> BuildLines(
         IReadOnlyList<AudioEvent> events,
@@ -288,31 +325,36 @@ public static class OverlayLayout
 
         foreach (var e in events)
         {
-            var length = LengthForLevel(e.Level, screenWidth, style);
-
             // Faint readings are dimmed, so an unreliable direction is visibly less
             // assertive than a confident one.
             var confidence = 0.35 + 0.65 * Math.Clamp(e.Confidence, 0.0, 1.0);
             var distanceConfidence = 0.45 + 0.55 * Math.Clamp(e.DistanceConfidence, 0.0, 1.0);
             var alpha = Math.Clamp(e.Level, 0.0, 1.0) * confidence * distanceConfidence;
 
-            AddLine(result, e.Direction.AzimuthDegrees, alpha, e, length, thickness,
-                screenWidth, screenHeight, style);
+            if (e.Balance is double balance)
+            {
+                // Stereo: the edge and the length both come from the imbalance between
+                // the channels, and the height still comes from the bearing.
+                //
+                // A sound that is not off to one side draws nothing, because the sign of
+                // its bearing is noise out here and the difference between the ears is
+                // the only honest thing to show. The old behaviour - mirror it onto both
+                // edges - lit both sides at equal intensity for everything uncertain, so
+                // a grenade off to the right looked identical to a grenade in your face.
+                if (Math.Abs(balance) < style.BalanceFloor) continue;
 
-            // A cue whose side is not known is drawn from both edges at the same height.
-            //
-            // The sign of the bearing picks the edge, and near dead-ahead the bearing is
-            // a couple of degrees of noise, so its sign is not a measurement. Drawing it
-            // on the side the noise favoured shows a coin toss as a fact - which is how
-            // music playing in both headphones came out always on the left. Mirroring is
-            // honest: the distance from ahead is still shown, the side is not claimed.
-            //
-            // Negating the azimuth mirrors the edge and leaves |azimuth| alone, so both
-            // lines sit at the same height. They must, or the pair would read as two
-            // separate bearings rather than one unknown side.
-            if (e.Ambiguous)
-                AddLine(result, -e.Direction.AzimuthDegrees, alpha, e, length, thickness,
+                var side = Math.CopySign(1.0, balance);
+                AddLine(result, side * Math.Abs(e.Direction.AzimuthDegrees), alpha, e,
+                    LengthForBalance(balance, screenWidth, style), thickness,
                     screenWidth, screenHeight, style);
+                continue;
+            }
+
+            // Multichannel: every speaker has a real bearing, so the sign of the bearing
+            // is a measurement and length can carry loudness as before.
+            AddLine(result, e.Direction.AzimuthDegrees, alpha, e,
+                LengthForLevel(e.Level, screenWidth, style), thickness,
+                screenWidth, screenHeight, style);
         }
 
         return result;

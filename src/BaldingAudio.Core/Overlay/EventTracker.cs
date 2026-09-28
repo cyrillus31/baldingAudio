@@ -26,7 +26,20 @@ public sealed class EventTracker
     {
         public double Azimuth;
         public double Level;
+
+        /// <summary>Level the envelope is heading towards, per frame from the spectrum.</summary>
         public double TargetLevel;
+
+        /// <summary>
+        /// Balance the envelope is heading towards, per frame from the spectrum, in the
+        /// same units as <see cref="TargetLevel"/>. Separate from it because they answer
+        /// different questions and a line has to show both: how loud, and how lopsided.
+        /// </summary>
+        public double TargetBalance;
+
+        /// <summary>Balance after the envelope, -1..1. Drives the edge and the length.</summary>
+        public double Balance;
+
         public double Confidence;
         public double DistanceConfidence;
         public double Age;
@@ -34,7 +47,10 @@ public sealed class EventTracker
         public double Dbfs;
         public double ClassConfidence;
         public SoundClass Class;
-        public bool Ambiguous;
+
+        /// <summary>Null in multichannel mode, where the edge and length come from elsewhere.</summary>
+        public double? BalanceDriven;
+
         public long Id;
     }
 
@@ -123,7 +139,12 @@ public sealed class EventTracker
             t.Age = 0;
             t.Silence = 0;
             t.Dbfs = Math.Max(t.Dbfs, e.Dbfs);
-            t.Ambiguous = e.Ambiguous;
+            t.BalanceDriven = e.Balance;
+            if (e.Balance is double b)
+            {
+                t.TargetBalance = b;
+                t.Balance = b;
+            }
             if (Rank(e.Class) >= Rank(t.Class))
             {
                 t.Class = e.Class;
@@ -144,7 +165,9 @@ public sealed class EventTracker
             Dbfs = e.Dbfs,
             Class = e.Class,
             ClassConfidence = e.ClassConfidence,
-            Ambiguous = e.Ambiguous,
+            BalanceDriven = e.Balance,
+            Balance = e.Balance ?? 0.0,
+            TargetBalance = e.Balance ?? 0.0,
             Id = _nextId++,
         });
 
@@ -199,6 +222,12 @@ public sealed class EventTracker
             t.Age += dt;
             t.Level = Step(t.Level, t.TargetLevel, dt);
 
+            // The balance gets the same envelope, so the bar length and the edge move
+            // at the speed the sound does. Stepping the signed value rather than the
+            // magnitude is what makes a line slide across the band when a sound passes
+            // in front of the player, instead of jumping from one edge to the other.
+            t.Balance = Step(t.Balance, t.TargetBalance, dt);
+
             if (t.Level > 0.004)
             {
                 t.Silence = 0;
@@ -242,7 +271,7 @@ public sealed class EventTracker
             if (peakLevel >= FollowThreshold)
             {
                 t.TargetLevel = peakLevel;
-                t.Ambiguous = spectrum.Ambiguous;
+                RetargetBalance(t, spectrum);
 
                 // Slew toward the louder bearing, but only when it is actually louder
                 // than where the line already is. Otherwise a line would drift toward
@@ -266,12 +295,18 @@ public sealed class EventTracker
                 Math.Abs(DirectionSpectrum.Wrap180(globalAz - t.Azimuth)) <= StartWindowDegrees)
             {
                 t.TargetLevel = globalLevel;
-                t.Ambiguous = spectrum.Ambiguous;
+                RetargetBalance(t, spectrum);
                 continue;
             }
 
             // Nothing measured there: let the line fall back rather than hold.
+            //
+            // The balance goes with the level. A line whose sound has stopped being
+            // lopsided has to shrink, or a line that happened to be hard right when it
+            // started stays hard right for the whole release and keeps claiming a side
+            // that no longer exists.
             t.TargetLevel = 0;
+            t.TargetBalance = 0;
         }
 
         if (globalLevel < SpectrumStartThreshold) return;
@@ -286,8 +321,26 @@ public sealed class EventTracker
             TargetLevel = globalLevel,
             Confidence = 0.5,
             DistanceConfidence = 0.0,
-            Ambiguous = spectrum.Ambiguous,
+            BalanceDriven = spectrum.Balance,
+            Balance = spectrum.Balance ?? 0.0,
+            TargetBalance = spectrum.Balance ?? 0.0,
         });
+    }
+
+    /// <summary>
+    /// Aims a line at the balance the spectrum is reporting this frame.
+    ///
+    /// <para>
+    /// Guarded on the spectrum actually carrying one, because a multichannel frame
+    /// has none and a null there would silently retarget every line's balance to zero
+    /// and blank the overlay on an endpoint that is working perfectly well.
+    /// </para>
+    /// </summary>
+    private static void RetargetBalance(Track t, DirectionSpectrum spectrum)
+    {
+        if (spectrum.Balance is not double b) return;
+        t.BalanceDriven = b;
+        t.TargetBalance = b;
     }
 
     /// <summary>One-pole envelope step: rise at the attack rate, fall at the release rate.</summary>
@@ -344,7 +397,7 @@ public sealed class EventTracker
                 t.DistanceConfidence,
                 0)
             {
-                Ambiguous = t.Ambiguous,
+                Balance = t.BalanceDriven,
             });
         }
         return list;
