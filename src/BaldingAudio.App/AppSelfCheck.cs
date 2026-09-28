@@ -1,3 +1,5 @@
+using System.Reflection;
+using BaldingAudio.App.Audio;
 using BaldingAudio.Core.Audio;
 
 namespace BaldingAudio.App;
@@ -30,6 +32,10 @@ internal static class AppSelfCheck
         {
             CheckPublishDeliversTheCurrentFrame(),
             CheckSnapshotIsStableWhileTheCaptureThreadRuns(),
+            CheckHealthyIterationDoesNotReopen(),
+            CheckSilenceCanNeverCauseAReopen(),
+            CheckFailureClassificationDecidesTheLoop(),
+            CheckBackoffClearsAfterAStreamProvesItself(),
         };
 
         foreach (var r in results)
@@ -180,6 +186,229 @@ internal static class AppSelfCheck
     }
 
     private const string Name2 = "a snapshot is never read while the capture thread is writing it";
+
+    /// <summary>
+    /// A capture loop with nothing wrong with it must leave the endpoint alone.
+    ///
+    /// <para>
+    /// The field bug, and the reason this exists. The loop was written to re-open the
+    /// endpoint on any failure, and the re-open ended up outside the failure handling, so
+    /// it also ran on a perfectly healthy iteration - where there is no failure to report
+    /// and the reason is null. The endpoint was torn down and rebuilt about ten times a
+    /// second, and a stream that is destroyed every 100 ms never has time to deliver
+    /// audio, so the overlay showed nothing at all. The process stayed alive, the 60 Hz
+    /// heartbeat kept ticking, and every line said <c>capture ok</c> - because the thread
+    /// was running, which is true, and the thread had nothing to work with, which it does
+    /// not check.
+    /// </para>
+    ///
+    /// <para>
+    /// So the assertion is the negative one, which is the only one that matters: given a
+    /// healthy iteration, the answer must be "keep going" and nothing else.
+    /// </para>
+    /// </summary>
+    private static Check CheckHealthyIterationDoesNotReopen()
+    {
+        var healthy = WasapiLoopbackCapture.Decide(threwRecoverable: false, threwFatal: false);
+
+        if (healthy != WasapiLoopbackCapture.LoopAction.KeepGoing)
+            return new(Name3, false,
+                $"a healthy iteration returned {healthy}, so the loop re-opens the endpoint while " +
+                "everything is working. Each re-open destroys the stream before it can deliver " +
+                "audio, so the overlay stays empty. The recovery has to be reachable only from a " +
+                "real failure.");
+
+        // Checked across a full second of iterations rather than once, because a decision
+        // that is correct once but wrong per-iteration still tears the endpoint down ~10x a
+        // second. This is the rate the field run showed.
+        var reopensInOneSecond = 0;
+        for (var iteration = 0; iteration < 250; iteration++)
+        {
+            if (WasapiLoopbackCapture.Decide(false, false) != WasapiLoopbackCapture.LoopAction.KeepGoing)
+                reopensInOneSecond++;
+        }
+
+        if (reopensInOneSecond > 0)
+            return new(Name3, false,
+                $"{reopensInOneSecond} of 250 consecutive healthy iterations chose to re-open");
+
+        return new(Name3, true,
+            "a healthy iteration re-opens nothing, in 250 consecutive iterations - the endpoint " +
+            "survives to deliver audio");
+    }
+
+    private const string Name3 = "a healthy capture loop leaves the endpoint alone";
+
+    /// <summary>
+    /// Silence must be incapable of causing a re-open, at any duration.
+    ///
+    /// <para>
+    /// This is the strongest form the assertion can take, and the field run is why. A
+    /// WASAPI loopback stream delivers nothing while the endpoint is not playing - not a
+    /// trickle, nothing, and <c>GetNextPacketSize</c> returns
+    /// <c>AUDCLNT_S_BUFFER_EMPTY</c> indefinitely. Measured: 55 seconds of the app running
+    /// with nothing playing, zero packets, then correct bearings within a second of audio
+    /// starting.
+    /// </para>
+    ///
+    /// <para>
+    /// So "no packets" is the normal idle state and is indistinguishable from a dead
+    /// stream. A stall threshold does not separate them, it picks a point on the overlap
+    /// and destroys working endpoints past it. 5 seconds of quiet between sounds did
+    /// exactly that: the stream was re-opened, and the replacement never delivered, so the
+    /// overlay was permanently blank while the log said <c>capture ok</c>. That is worse
+    /// than the disappearing overlay the stall check was added to fix.
+    /// </para>
+    ///
+    /// <para>
+    /// The check asserts the input is <em>absent</em> from the decision, not merely that
+    /// some duration is tolerated. A silent, never-played endpoint and a healthy one are
+    /// the same input now, so no value can push the decision to re-open, and the mistake
+    /// cannot be reintroduced without this failing first.
+    /// </para>
+    /// </summary>
+    private static Check CheckSilenceCanNeverCauseAReopen()
+    {
+        var decide = typeof(WasapiLoopbackCapture)
+            .GetMethod("Decide", BindingFlags.NonPublic | BindingFlags.Static);
+
+        if (decide is null)
+            return new(Name4, false, "the capture loop's decision function could not be found");
+
+        var parameters = decide.GetParameters().Select(p => p.Name ?? "?").ToArray();
+        var silenceInputs = parameters
+            .Where(n => n.Contains("silence", StringComparison.OrdinalIgnoreCase)
+                     || n.Contains("stall", StringComparison.OrdinalIgnoreCase)
+                     || n.Contains("sawPacket", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+
+        if (silenceInputs.Length > 0)
+            return new(Name4, false,
+                $"the capture loop's decision takes {string.Join(", ", silenceInputs)}. A loopback " +
+                "stream delivers nothing while nothing is playing, so silence is the normal idle " +
+                "state and not a fault signal. Re-opening on a timer tore down a working endpoint " +
+                "and left the overlay permanently blank. Recovery belongs to thrown HRESULTs, which " +
+                "are unambiguous.");
+
+        // The field case exactly: healthy, and the endpoint is not playing.
+        var idle = WasapiLoopbackCapture.Decide(threwRecoverable: false, threwFatal: false);
+        if (idle != WasapiLoopbackCapture.LoopAction.KeepGoing)
+            return new(Name4, false, $"a silent, healthy endpoint returned {idle}, expected KeepGoing");
+
+        // A recoverable failure must still re-open, or the overlay disappears when the
+        // device is invalidated. Removing silence must not have removed recovery.
+        var recovered = WasapiLoopbackCapture.Decide(threwRecoverable: true, threwFatal: false);
+        if (recovered != WasapiLoopbackCapture.LoopAction.Reopen)
+            return new(Name4, false, $"a recoverable failure returned {recovered}, expected Reopen");
+
+        return new(Name4, true,
+            "the decision takes no silence input at all, so a quiet endpoint can never re-open " +
+            "the stream, and thrown HRESULTs still recover");
+    }
+
+    private const string Name4 = "silence can never cause the endpoint to be re-opened";
+
+    /// <summary>
+    /// The three loop outcomes are driven by the HRESULT classification, and the loop
+    /// applies them to the same <c>Decide</c> the healthy and stall cases above test.
+    ///
+    /// <para>
+    /// This ties the interop checks to the behaviour that depends on them. The
+    /// classification itself is asserted in <see cref="Audio.InteropSelfCheck"/> against the
+    /// SDK; what was not covered until now is that a recoverable HRESULT actually reaches
+    /// the recovery path and a fatal one actually stops the thread. A fault in either
+    /// direction is silent in the field: too many recoveries looks like a busy log, and too
+    /// few looks like the overlay "just not working today".
+    /// </para>
+    /// </summary>
+    private static Check CheckFailureClassificationDecidesTheLoop()
+    {
+        // The real interop constants, not literals. This check is only worth anything if it
+        // tests the same values the capture loop branches on, and a copy would drift.
+        // Read into locals because they are `static readonly`, not `const`.
+        var invalidated = MMDevice.AUDCLNT_E_DEVICE_INVALIDATED;
+        var notAnInvalidation = MMDevice.AUDCLNT_E_WRONG_ENDPOINT_TYPE;
+
+        if (WasapiLoopbackCapture.IsRecoverableFailure(invalidated) != true)
+            return new(Name5, false,
+                $"AUDCLNT_E_DEVICE_INVALIDATED (0x{(uint)invalidated:X8}) is not classified as " +
+                "recoverable, so an endpoint that was invalidated is never re-opened. This is the " +
+                "fault that left the overlay permanently dead until the app was restarted.");
+
+        if (WasapiLoopbackCapture.IsRecoverableFailure(notAnInvalidation))
+            return new(Name5, false,
+                $"AUDCLNT_E_WRONG_ENDPOINT_TYPE (0x{(uint)notAnInvalidation:X8}) is classified as " +
+                "recoverable. It is a permanent mistake in how the stream was opened, so retrying " +
+                "it forever leaves the thread spinning on a failure it can never get past.");
+
+        // Recoverable HRESULT -> the loop recovers. This is the whole point of the fix for
+        // the disappearing overlay.
+        var recoverable = WasapiLoopbackCapture.Decide(threwRecoverable: true, threwFatal: false);
+        if (recoverable != WasapiLoopbackCapture.LoopAction.Reopen)
+            return new(Name5, false,
+                $"a recoverable failure returned {recoverable}, expected Reopen");
+
+        // Fatal HRESULT -> the loop stops, rather than retrying something it cannot fix.
+        var fatal = WasapiLoopbackCapture.Decide(threwRecoverable: false, threwFatal: true);
+        if (fatal != WasapiLoopbackCapture.LoopAction.Stop)
+            return new(Name5, false,
+                $"an unrecoverable failure returned {fatal}, expected Stop");
+
+        // And a fatal HRESULT wins over a recoverable one, so a loop cannot be left running
+        // on the strength of a stale flag.
+        var both = WasapiLoopbackCapture.Decide(threwRecoverable: true, threwFatal: true);
+        if (both != WasapiLoopbackCapture.LoopAction.Stop)
+            return new(Name5, false, $"with both flags set the loop returned {both}, expected Stop");
+
+        return new(Name5, true,
+            "recoverable HRESULT re-opens the endpoint, unrecoverable stops the thread, and a " +
+            "non-invalidation HRESULT is not treated as recoverable");
+    }
+
+    private const string Name5 = "the HRESULT classification reaches the recovery path";
+
+    /// <summary>
+    /// A re-opened stream that keeps working must clear the restart backoff.
+    ///
+    /// <para>
+    /// The count is only used to lengthen the delay between recovery attempts, so that
+    /// an endpoint that is genuinely gone does not spin. It is never reset by anything
+    /// else, which makes clearing it the difference between recovering promptly and
+    /// being stuck at the 2 s ceiling for the rest of the session.
+    /// </para>
+    ///
+    /// <para>
+    /// The check exists because the clear was dead code and nothing said so. It was
+    /// guarded on the time since the last packet, but called from inside the packet
+    /// handler on the line after that timestamp was set to the current time, so the
+    /// elapsed value was always zero and the guard always failed. The comment above it
+    /// described behaviour that did not exist. Extracted as a pure function so the
+    /// threshold can be asserted rather than inferred.
+    /// </para>
+    /// </summary>
+    private static Check CheckBackoffClearsAfterAStreamProvesItself()
+    {
+        const long required = 10_000;
+
+        // A stream that has just been re-opened has proved nothing yet.
+        if (WasapiLoopbackCapture.IsProvenStable(0, required))
+            return new(Name6, false, "a stream that has only just been opened counts as proven stable");
+
+        if (WasapiLoopbackCapture.IsProvenStable(required - 1, required))
+            return new(Name6, false, "a stream one millisecond short of the threshold counts as proven stable");
+
+        if (!WasapiLoopbackCapture.IsProvenStable(required, required))
+            return new(Name6, false, $"a stream open for {required} ms does not count as proven stable");
+
+        if (!WasapiLoopbackCapture.IsProvenStable(required * 10, required))
+            return new(Name6, false, "a stream open far longer than the threshold does not count as proven stable");
+
+        return new(Name6, true,
+            "the backoff clears once a re-opened stream has kept delivering past the threshold, and " +
+            "not before, so a stream that dies immediately cannot reset it every attempt");
+    }
+
+    private const string Name6 = "the recovery backoff clears once a stream proves itself";
 
     /// <summary>
     /// Total energy across all bins, which is what <c>Add</c> was given before it spread

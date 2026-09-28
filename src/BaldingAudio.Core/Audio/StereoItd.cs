@@ -138,21 +138,45 @@ public sealed class StereoItd
         Result = (new Direction(azimuth, 0), confidence, distanceConfidence);
     }
 
-    /// <summary>Normalised cross-correlation over +/- the maximum plausible ITD.</summary>
+    /// <summary>
+    /// Normalised cross-correlation over +/- the maximum plausible ITD.
+    ///
+    /// <para>
+    /// Every lag is scored on <em>the same</em> samples: the window is trimmed by
+    /// <c>_maxLag</c> at each end so that all of them stay in bounds. That is the whole
+    /// point, and getting it wrong inverts the estimate.
+    /// </para>
+    ///
+    /// <para>
+    /// Scoring each lag over its own maximal overlap - the obvious implementation -
+    /// silently drops the right-hand tail at positive lags and nothing at negative ones,
+    /// because the delay can only push samples past the end of the buffer, never before
+    /// its start. Positive lags are then computed from fewer terms than negative ones and
+    /// score lower for that reason alone. Broadband noise is barely affected, so a test
+    /// using noise passes. Anything periodic is not: for a 440 Hz tone the correlation is
+    /// nearly flat, the missing tail is enough to move the peak, and a source on the left
+    /// comes out on the right. Measured on the user's machine: a source 20 samples late
+    /// on the right measured -291 us and reported +88.6 deg, which is the opposite side.
+    /// </para>
+    /// </summary>
     private (double Lag, double Peak) BestLag(int offset, int length)
     {
-        var available = offset + length;
+        // Samples that are in bounds for every lag in the search range.
+        var lo = _maxLag;
+        var hi = length - _maxLag;
+        if (hi <= lo) return (0, 0);
+
         var bestLag = 0;
         var bestScore = double.NegativeInfinity;
 
         var normL = 0.0;
-        for (var i = 0; i < length; i++) normL += (double)_left[offset + i] * _left[offset + i];
+        for (var i = lo; i < hi; i++) normL += (double)_left[offset + i] * _left[offset + i];
         if (normL < 1e-12) return (0, 0);
         normL = Math.Sqrt(normL);
 
         for (var lag = -_maxLag; lag <= _maxLag; lag++)
         {
-            var score = ScoreAt(lag, offset, length, normL, available);
+            var score = ScoreAt(lag, offset, lo, hi, normL);
             if (score > bestScore)
             {
                 bestScore = score;
@@ -167,9 +191,9 @@ public sealed class StereoItd
         var sub = 0.0;
         if (bestLag > -_maxLag && bestLag < _maxLag)
         {
-            var y0 = ScoreAt(bestLag - 1, offset, length, normL, available);
+            var y0 = ScoreAt(bestLag - 1, offset, lo, hi, normL);
             var y1 = bestScore;
-            var y2 = ScoreAt(bestLag + 1, offset, length, normL, available);
+            var y2 = ScoreAt(bestLag + 1, offset, lo, hi, normL);
             var denom = y0 - 2 * y1 + y2;
             if (Math.Abs(denom) > 1e-9) sub = Math.Clamp(0.5 * (y0 - y2) / denom, -1, 1);
         }
@@ -177,15 +201,14 @@ public sealed class StereoItd
         return (bestLag + sub, bestScore);
     }
 
-    private double ScoreAt(int lag, int offset, int length, double normL, int available)
+    /// <summary>Normalised correlation at one lag, over the shared window [lo, hi).</summary>
+    private double ScoreAt(int lag, int offset, int lo, int hi, double normL)
     {
         var acc = 0.0;
         var normR = 0.0;
-        for (var i = 0; i < length; i++)
+        for (var i = lo; i < hi; i++)
         {
-            var j = offset + i + lag;
-            if (j < 0 || j >= available) continue;
-            var b = _right[j];
+            var b = _right[offset + i + lag];
             acc += (double)_left[offset + i] * b;
             normR += (double)b * b;
         }

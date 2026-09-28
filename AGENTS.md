@@ -125,7 +125,7 @@ export PATH="$HOME/.dotnet:$PATH"
 dotnet build src/BaldingAudio.Core/BaldingAudio.Core.csproj -c Release
 
 # Self-test: renders synthetic 7.1 audio and checks the reported direction,
-# plus the layout and the moving-line behaviour. Nine checks.
+# plus the layout, the moving-line behaviour and the capture handoff.
 dotnet run --project src/BaldingAudio.App/BaldingAudio.App.csproj -- --selftest
 
 # Publish the Windows app, also from Linux.
@@ -138,11 +138,21 @@ There is no xunit test project yet. The self-test in
 headless on Linux. It is the fastest way to check a change, so extend it rather than
 leaving a fix unverified.
 
-`--selftest` runs two groups. The DSP and display checks come from Core. The Win32
+`--selftest` runs three groups. The DSP and display checks come from Core. The Win32
 interop checks are in `src/BaldingAudio.App/Audio/InteropSelfCheck.cs`, because the
-Win32 declarations live in App and Core must stay free of them. Fourteen checks total.
-The interop group needs no audio device, so a wrong constant is caught in a second
-rather than on the user's machine.
+Win32 declarations live in App and Core must stay free of them. The capture-handoff
+checks are in `src/BaldingAudio.App/AppSelfCheck.cs`, covering the seam between the
+capture thread and the UI thread, which is where a fault is reported as a broken
+analyser. 26 checks total, and all of them run headless on Linux. The interop group
+needs no audio device, so a wrong constant is caught in a second rather than on the
+user's machine.
+
+**A check that cannot fail is worse than no check.** Every fix here is verified by
+reverting it and watching the check go red, and that has caught three real problems:
+an outline check that passed with the outline removed, a handoff check that passed
+against the old buffer swap, and an ITD check that passed on noise while the
+estimator was wrong for every periodic sound. Choose the test signal to match the
+bug, not the code.
 
 ## Running it on Windows
 

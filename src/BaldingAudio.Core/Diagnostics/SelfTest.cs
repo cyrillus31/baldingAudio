@@ -25,6 +25,7 @@ public static class SelfTest
         {
             TestSustainedSoundReportsWhileSounding(),
             TestStereoItdResolvesBothSides(),
+            TestStereoItdResolvesBothSidesOnTonalSound(),
             TestStereoSpectrumFollowsTheMeasuredBearing(),
             TestSingleSpeaker(),
             TestDominatedSpeaker(),
@@ -305,6 +306,91 @@ public static class SelfTest
     }
 
     private const string N4 = "stereo ITD resolves a source on either side, not just the left";
+
+    /// <summary>
+    /// The same test on a sound that is partly tonal, which is most real sounds.
+    ///
+    /// <para>
+    /// The ITD estimate is a cross-correlation, and a cross-correlation is only as
+    /// trustworthy as its peak. Broadband noise gives a sharp, unambiguous peak;
+    /// anything with strong periodic content gives a flat one, with several lags scoring
+    /// almost as well. That is where the correlation window mattered.
+    /// </para>
+    ///
+    /// <para>
+    /// The window was trimmed at its right end only, because a delay can push samples
+    /// past the end of the buffer but never before its start. Positive lags were
+    /// therefore scored over fewer samples than negative ones and lost points for that
+    /// reason alone. On noise that is a small bias. On a 440 Hz tone the correlation is
+    /// so flat that the missing tail moved the peak past the true lag, and a source on
+    /// the left was reported on the right: -291 us measured, +88.6 deg reported. On the
+    /// user's machine, against a real signal, a sound on the left drew its line on the
+    /// right-hand edge of the screen.
+    /// </para>
+    ///
+    /// <para>
+    /// <see cref="N4"/> cannot catch this. It uses broadband noise, chosen for good
+    /// reason, and broadband noise is the one signal that hides the fault.
+    /// </para>
+    /// </summary>
+    private static Result TestStereoItdResolvesBothSidesOnTonalSound()
+    {
+        // Harmonics with decaying amplitude: a voice, a gunshot body, an engine note.
+        // Periodic, so the cross-correlation is flat and the peak is a real test.
+        static float Tone(int t)
+        {
+            var v = 0.0;
+            for (var h = 1; h <= 5; h++)
+                v += Math.Sin(2.0 * Math.PI * 220.0 * h * t / SampleRate) / h;
+            return (float)(v * 0.5);
+        }
+
+        // `rightDelay` is how many samples late the right ear hears it, so a positive
+        // value puts the source on the LEFT and must read negative.
+        static (double Azimuth, double Peak) AzimuthFor(int rightDelay)
+        {
+            var itd = new StereoItd(SampleRate, 128);
+            var block = new float[128 * 2];
+            for (var i = 0; i < 20000; i++)
+            {
+                var p = i % 128;
+                block[p * 2 + 0] = Tone(i);
+                block[p * 2 + 1] = i - rightDelay >= 0 ? Tone(i - rightDelay) : 0f;
+                if (p == 127) itd.Analyse(block, 128, 2);
+            }
+            return (itd.Result.Direction.AzimuthDegrees, itd.LastCorrelationPeak);
+        }
+
+        var (left, leftPeak) = AzimuthFor(20);
+        var (right, rightPeak) = AzimuthFor(-20);
+
+        if (left >= 0)
+            return new(N4b, false,
+                $"a tonal source 20 samples late on the right reported {left:F1} deg; the right ear " +
+                "hears it last, so the source is on the left and the bearing must be negative. A " +
+                "correct bearing for a source this periodic is only possible if every candidate " +
+                "lag was scored on the same samples.");
+        if (right <= 0)
+            return new(N4b, false,
+                $"a tonal source 20 samples early on the right reported {right:F1} deg; the right " +
+                "ear hears it first, so the source is on the right and the bearing must be positive");
+
+        // The correlation must also be a real peak. A low value means the search settled on
+        // a lag that is merely the least-bad one, which is how a truncated window announces
+        // itself on a periodic signal.
+        if (leftPeak < 0.9 || rightPeak < 0.9)
+            return new(N4b, false,
+                $"the correlation peaked at {leftPeak:F3} (left) and {rightPeak:F3} (right), below " +
+                "0.9. A delayed copy of the same periodic signal should correlate almost perfectly, " +
+                "so a low peak means the winning lag is an artefact of the window rather than the " +
+                "signal.");
+
+        return new(N4b, true,
+            $"tonal source reads {left:F0} deg on the left and {right:F0} deg on the right, with " +
+            $"correlation peaks of {leftPeak:F3} and {rightPeak:F3}");
+    }
+
+    private const string N4b = "stereo ITD resolves a source on either side for a periodic sound too";
 
     private static Result TestSingleSpeaker()
     {

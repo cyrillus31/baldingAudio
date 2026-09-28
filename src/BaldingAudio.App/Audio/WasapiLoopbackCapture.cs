@@ -64,11 +64,31 @@ public sealed class WasapiLoopbackCapture : IDisposable
     /// <summary>Options the capture was last started with, so it can restart itself.</summary>
     private CaptureOptions? _options;
 
-    /// <summary>Number of times the stream has been re-opened after a failure.</summary>
-    public int RestartCount { get; private set; }
+    /// <summary>
+    /// Number of times the stream has been re-opened after a failure.
+    ///
+    /// Backed by a field and read with <see cref="Volatile"/> rather than being an
+    /// auto-property: it is incremented and reset on the capture thread while the UI
+    /// thread reads it in the heartbeat and in the re-open backoff. An auto-property
+    /// read is a plain non-atomic access to a 32-bit int, which is not torn on .NET but
+    /// can be reordered against the write, so the UI could show a stale count.
+    /// </summary>
+    private int _restartCount;
 
-    /// <summary>Describes the last failure, or null while capture is healthy.</summary>
-    public string? LastFailure { get; private set; }
+    public int RestartCount => Volatile.Read(ref _restartCount);
+
+    private void SetRestartCount(int value) => Volatile.Write(ref _restartCount, value);
+
+    /// <summary>
+    /// Describes the last failure, or null while capture is healthy. Also written on the
+    /// capture thread and read by the UI thread, so kept behind a volatile field for the
+    /// same reason as the restart count.
+    /// </summary>
+    private string? _lastFailure;
+
+    public string? LastFailure => Volatile.Read(ref _lastFailure);
+
+    private void SetLastFailure(string? value) => Volatile.Write(ref _lastFailure, value);
 
     public void Start(CaptureOptions options)
     {
@@ -215,54 +235,208 @@ public sealed class WasapiLoopbackCapture : IDisposable
         }
     }
 
-    /// <summary>Longest gap between packets before the stream counts as stalled.</summary>
-    private const double StallSeconds = 5.0;
-
+    /// <summary>
+    /// When the last packet arrived, for reporting only.
+    ///
+    /// <para>
+    /// This used to be an input to stall detection. It no longer is, and the reason is
+    /// worth keeping in mind before anyone puts it back.
+    /// </para>
+    ///
+    /// <para>
+    /// A WASAPI loopback stream delivers nothing while the endpoint is not playing. Not
+    /// a slow trickle - nothing at all, and <c>GetNextPacketSize</c> returns
+    /// <c>AUDCLNT_S_BUFFER_EMPTY</c> forever. Measured on the user's machine: the app
+    /// ran 55 seconds with nothing playing and received zero packets, then resolved
+    /// bearings correctly within a second of audio starting.
+    /// </para>
+    ///
+    /// <para>
+    /// So "no packets" is the normal idle state and cannot be told apart from "the
+    /// stream died" by any threshold. Every attempt to separate them by time destroyed a
+    /// working endpoint: 5 seconds of quiet between sounds re-opened the stream, and the
+    /// re-opened stream never delivered again, leaving the overlay permanently blank
+    /// while the log said <c>capture ok</c> - the same dead overlay as the fault this
+    /// code was written to fix. A threshold is not a fix for a difference that is not
+    /// observable.
+    /// </para>
+    /// </para>
+    /// </summary>
     private long _lastPacketTicks;
 
-    /// <summary>True while a capture thread is alive and the endpoint is not stalled.</summary>
-    public bool IsHealthy => _running && Environment.TickCount64 - _lastPacketTicks < (long)(StallSeconds * 1000);
+    private volatile bool _sawPacket;
+
+    /// <summary>Whether any audio has arrived since the stream was last opened.</summary>
+    public bool HasReceivedAudio => _sawPacket;
+
+    /// <summary>
+    /// Seconds since the last packet, or -1 if none has ever arrived. For the log only.
+    /// </summary>
+    public double SecondsSinceLastPacket =>
+        !_sawPacket ? -1 : (Environment.TickCount64 - _lastPacketTicks) / 1000.0;
+
+    /// <summary>
+    /// True while the capture thread is alive.
+    ///
+    /// <para>
+    /// Deliberately says nothing about whether audio is arriving, because that is not
+    /// knowable - see <see cref="_lastPacketTicks"/>. A stream that is open and healthy
+    /// reports healthy here whether the endpoint is playing or silent, and a stream that
+    /// has died silently is indistinguishable from a silent one. The recovery that exists
+    /// is driven by thrown HRESULTs, which are unambiguous.
+    /// </para>
+    /// </summary>
+    public bool IsHealthy => _running;
+
+    /// <summary>What the capture loop should do after one iteration.</summary>
+    internal enum LoopAction
+    {
+        /// <summary>Nothing went wrong. Keep draining.</summary>
+        KeepGoing,
+
+        /// <summary>Recoverable. Re-open the endpoint and carry on.</summary>
+        Reopen,
+
+        /// <summary>Not recoverable. Stop the thread.</summary>
+        Stop,
+    }
+
+    /// <summary>
+    /// The capture loop's decision, as a pure function of what was observed.
+    ///
+    /// <para>
+    /// Extracted because the loop cannot be exercised without an audio device, and
+    /// because getting it wrong is silent. Two separate mistakes are covered here, both
+    /// of which shipped:
+    /// </para>
+    ///
+    /// <para>
+    /// A healthy iteration must do nothing. The loop this replaces called
+    /// <c>TryReopen</c> unconditionally, so a perfectly healthy iteration - which has no
+    /// failure to report - still tore the endpoint down and rebuilt it, about ten times a
+    /// second. The endpoint never lasted long enough to deliver audio, so the overlay
+    /// showed nothing at all, while the process stayed alive and the heartbeat said
+    /// <c>capture ok</c>.
+    /// </para>
+    ///
+    /// <para>
+    /// And silence must not be a failure. There used to be a third input,
+    /// <c>silenceMilliseconds</c>, with a 5 second stall threshold. It is gone, because
+    /// the thing it was trying to detect is not observable - see
+    /// <see cref="_lastPacketTicks"/>. It fired on ordinary quiet, destroyed a working
+    /// endpoint, and the replacement never worked either, which is a worse failure than
+    /// the one it was added to prevent.
+    /// </para>
+    /// </summary>
+    /// <param name="threwRecoverable">The iteration threw, and the HRESULT is recoverable.</param>
+    /// <param name="threwFatal">The iteration threw, and the HRESULT is not recoverable.</param>
+    internal static LoopAction Decide(bool threwRecoverable, bool threwFatal)
+    {
+        if (threwFatal) return LoopAction.Stop;
+        if (threwRecoverable) return LoopAction.Reopen;
+        return LoopAction.KeepGoing;
+    }
 
     private void CaptureLoop()
     {
         _lastPacketTicks = Environment.TickCount64;
+        _openedTicks = Environment.TickCount64;
 
         while (_running)
         {
             var waitMs = Math.Clamp((int)(_devicePeriod * 1000.0 / Math.Max(1, _sampleRate)), 2, 50);
 
-            string? reason = null;
+            var threwRecoverable = false;
+            var threwFatal = false;
+            string? thrown = null;
+
             try
             {
                 Drain(waitMs);
-
-                // No exception, but also no audio. A driver can leave the stream
-                // open and simply stop delivering, and that is the same dead overlay
-                // as a thrown error, so it is detected the same way.
-                if (Environment.TickCount64 - _lastPacketTicks >= (long)(StallSeconds * 1000))
-                    reason = $"no packets for {StallSeconds:F0}s";
             }
             catch (Exception ex)
             {
-                if (!IsRecoverableFailure(ex.HResult))
+                if (IsRecoverableFailure(ex.HResult))
                 {
-                    LastFailure = Describe(ex);
-                    _running = false;
-                    Log?.Invoke($"capture stopped: {Describe(ex)}");
-                    return;
+                    threwRecoverable = true;
+                    thrown = Describe(ex);
                 }
-                reason = Describe(ex);
+                else
+                {
+                    threwFatal = true;
+                    thrown = Describe(ex);
+                    SetLastFailure(thrown);
+                }
             }
 
-            // This branch is the fix. The loop used to break on any exception and
-            // nothing restarted it, so one invalidated endpoint left the process alive
-            // and the render loop drawing 60 frames a second with no audio behind it.
-            // From the user's side that is indistinguishable from a crashed app, and it
-            // is why "the overlay disappears" went undiagnosed: the heartbeat keeps
-            // ticking, because it runs on the UI thread and cannot see this thread die.
-            if (!TryReopen(reason)) return;
+            var action = Decide(threwRecoverable, threwFatal);
+
+            if (action == LoopAction.KeepGoing) continue;
+
+            if (action == LoopAction.Stop)
+            {
+                _running = false;
+                Log?.Invoke($"capture stopped: {thrown}");
+                return;
+            }
+
+            // Recovery on a real failure only. This branch is the fix for the field bug:
+            // the loop used to break on any exception and nothing restarted it, so one
+            // invalidated endpoint left the process alive and the render loop drawing 60
+            // frames a second with no audio behind it. From the user's side that is
+            // indistinguishable from a crashed app, and it is why "the overlay
+            // disappears" went undiagnosed - the heartbeat keeps ticking, because it runs
+            // on the UI thread and cannot see this thread die.
+            if (!TryReopen(thrown!)) return;
         }
     }
+
+    /// <summary>
+    /// Clears the restart count once a re-opened stream has proved itself, so a session
+    /// that recovers does not keep the 2 s backoff for the rest of the day.
+    ///
+    /// <para>
+    /// Only after a sustained run of packets, not on the first one. A stream that
+    /// delivers a single packet and then fails would otherwise reset the count every time
+    /// and be retried at the minimum delay forever, which is the spin the backoff exists
+    /// to prevent.
+    /// </para>
+    /// </summary>
+    /// <summary>
+    /// How long a re-opened stream must keep delivering before the restart count is
+    /// cleared. Long enough that a stream which delivers one packet and immediately dies
+    /// cannot reset the backoff on every attempt.
+    /// </summary>
+    private const long StableAfterMs = 10_000;
+
+    /// <summary>When the current stream was opened, for the stability check.</summary>
+    private long _openedTicks;
+
+    private void ResetBackoffIfHealthy()
+    {
+        if (RestartCount == 0) return;
+        if (!IsProvenStable(Environment.TickCount64 - _openedTicks, StableAfterMs)) return;
+
+        Log?.Invoke($"capture stable again after {RestartCount} restart(s)");
+        SetRestartCount(0);
+    }
+
+    /// <summary>
+    /// Whether a stream has been up and delivering for long enough to be trusted.
+    ///
+    /// <para>
+    /// The elapsed time is measured from when the stream was opened, not from the last
+    /// packet. It has to be: this is called from the packet handler immediately after
+    /// the last-packet timestamp is set, so measuring from that would always yield zero
+    /// and the backoff would never clear - which is what it did, silently, while the
+    /// comment above claimed otherwise. Every few seconds of quiet then cost 2 s per
+    /// recovery for the rest of the session.
+    /// </para>
+    /// </summary>
+    /// <param name="streamAgeMilliseconds">How long the current stream has been open.</param>
+    /// <param name="requiredMilliseconds">How long it must deliver before it is trusted.</param>
+    internal static bool IsProvenStable(double streamAgeMilliseconds, long requiredMilliseconds)
+        => streamAgeMilliseconds >= requiredMilliseconds;
 
     /// <summary>
     /// Re-opens the endpoint after a recoverable failure or a stall.
@@ -290,14 +464,22 @@ public sealed class WasapiLoopbackCapture : IDisposable
         }
         catch (Exception ex)
         {
-            LastFailure = Describe(ex);
+            SetLastFailure(Describe(ex));
             Log?.Invoke($"capture re-open failed ({Describe(ex)}); retrying in {delayMs} ms");
             return true;
         }
 
-        RestartCount++;
-        LastFailure = null;
+        SetRestartCount(RestartCount + 1);
+        SetLastFailure(null);
+
+        // Forget that the old stream ever delivered anything. The new one starts from
+        // nothing, so until it produces its first packet there is no evidence it works
+        // and none that it has stopped - and treating the gap as a stall would re-open
+        // it again immediately, which is the loop this whole path exists to avoid.
+        _sawPacket = false;
         _lastPacketTicks = Environment.TickCount64;
+        _openedTicks = Environment.TickCount64;
+
         Log?.Invoke(
             $"capture re-opened after {reason} (attempt {RestartCount}): " +
             $"{LayoutDescription}, {_sampleRate} Hz");
@@ -360,6 +542,13 @@ public sealed class WasapiLoopbackCapture : IDisposable
         {
             capture.GetBuffer(out var data, out var frames, out var flags, out _, out _);
             if (frames == 0) break;
+
+            // The stream is alive and delivering. Recorded for the log only - nothing
+            // branches on it, because silence cannot be told apart from a dead stream
+            // (see _lastPacketTicks). A silent packet still counts as proof of life.
+            _sawPacket = true;
+            _lastPacketTicks = Environment.TickCount64;
+            ResetBackoffIfHealthy();
 
             if (flags.HasFlag(AudioClientBufferFlags.Silent) || data == IntPtr.Zero)
             {
