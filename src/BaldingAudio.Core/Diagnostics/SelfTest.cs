@@ -48,6 +48,10 @@ public static partial class SelfTest
             TestCrossingFootstepIsMeasuredCrossing(),
             TestAmbienceDoesNotFakeADirection(),
             TestLoudCentredSoundDoesNotHideASideSound(),
+            TestHelpPageDemonstrationsAreTrue(),
+            TestEdgeGlowSideAndGrowth(),
+            TestLineCapKeepsTheLoudest(),
+            TestSoundFilterSelectsByClassAndLevel(),
         };
         foreach (var r in results)
             log?.Invoke($"  [{(r.Passed ? "PASS" : "FAIL")}] {r.Name}: {r.Detail}");

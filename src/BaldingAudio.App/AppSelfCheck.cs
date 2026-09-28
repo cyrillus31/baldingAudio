@@ -23,7 +23,7 @@ namespace BaldingAudio.App;
 /// again.
 /// </para>
 /// </summary>
-internal static class AppSelfCheck
+internal static partial class AppSelfCheck
 {
     internal record struct Check(string Name, bool Passed, string Detail);
 
@@ -39,6 +39,10 @@ internal static class AppSelfCheck
             CheckFailureClassificationDecidesTheLoop(),
             CheckBackoffClearsAfterAStreamProvesItself(),
             CheckSideThresholdSurvivesTheConfigFile(),
+            CheckTheVerdictAgreesWithWhatTheRendererDraws(),
+            CheckTheMeterKeepsAPeakLongEnoughToReadIt(),
+            CheckMovingASliderChangesTheOverlay(),
+            CheckTheReadoutTheAppBuildsActuallyHolds(),
         };
 
         foreach (var r in results)

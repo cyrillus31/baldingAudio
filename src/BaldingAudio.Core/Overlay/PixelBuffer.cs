@@ -59,6 +59,22 @@ public sealed class PixelBuffer
     /// half-transparent line look fully opaque, so a line's own alpha meant nothing.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// Composites one straight (non-premultiplied) colour over a single pixel.
+    /// </summary>
+    /// <remarks>
+    /// Exposed for the edge-glow mode, which is the only painter here that is not a
+    /// shape primitive and so has to address pixels itself. Everything else goes through
+    /// <see cref="FillCapsule"/> or the rounded-rect fills, which is deliberate: a shape
+    /// primitive gets anti-aliased edges for free, and hand-rolled per-pixel loops are
+    /// where the dark-halo bug above came from.
+    /// </remarks>
+    internal void Blend(int x, int y, Rgba colour, double alphaScale)
+    {
+        if (x < 0 || y < 0 || x >= Width || y >= Height) return;
+        Blend(y * Width + x, Pack(colour, alphaScale));
+    }
+
     private void Blend(int index, uint src)
     {
         var sa = src >> 24;

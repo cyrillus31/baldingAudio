@@ -7,12 +7,13 @@ namespace BaldingAudio.App;
 /// Global hotkeys. The overlay is click-through and the game owns the mouse and most
 /// of the keyboard, so the only practical way to reach the app is a global hotkey.
 ///
+///   Ctrl+Alt+Shift+S  open the settings window
 ///   Ctrl+Alt+Shift+B  show/hide the display
 ///   Ctrl+Alt+Shift+P  switch between the edge and compact layouts
 ///   Ctrl+Alt+Shift+D  run the analyser self-test
 ///   Ctrl+Alt+Shift+Q  quit
 ///
-/// All four carry Shift, and that is a fix rather than a style choice. Without it, the
+/// All five carry Shift, and that is a fix rather than a style choice. Without it, the
 /// show/hide key was Ctrl+Alt+B, and the user's field log recorded it firing four times
 /// unprompted partway through a game - the overlay paused itself and, because pausing
 /// cleared every line, looked exactly like a crash. Something in the game or in
@@ -50,6 +51,7 @@ internal sealed class HotkeyWindow : NativeWindow, IDisposable
 
     public void Register()
     {
+        Bind((byte)'S', () => _host.ShowSettings());
         Bind((byte)'B', () => _host.TogglePaused());
         Bind((byte)'P', () => _host.TogglePreset());
         Bind((byte)'D', () => _host.SelfTest());

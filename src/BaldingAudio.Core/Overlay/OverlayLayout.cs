@@ -168,6 +168,88 @@ public sealed class OverlayStyle
     /// <summary>Extra opacity on the outline, relative to the line's own alpha.</summary>
     public double OutlineAlphaGain { get; set; } = 1.0;
 
+    /// <summary>How cues are drawn. See <see cref="OverlayDisplayMode"/>.</summary>
+    public OverlayDisplayMode DisplayMode { get; set; } = OverlayDisplayMode.Lines;
+
+    /// <summary>
+    /// The colour every cue uses, whichever class it is.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Set by <see cref="SetAllColours"/>, and the single-colour case is kept as a real
+    /// property rather than by writing all six class slots from the settings window. The
+    /// six per-class slots were all identical to begin with, so a "colour" setting that
+    /// quietly meant "set all six" was a trap: it looked like one control and was really
+    /// six, and any future divergence between them would leave the control lying.
+    /// </para>
+    /// <para>
+    /// A cue's colour on screen is still the per-class one, so a future per-class
+    /// override is a change in one place rather than a change in how colour is stored.
+    /// </para>
+    /// </remarks>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public Rgba IndicatorColour
+    {
+        get => For(SoundClass.Footstep);
+        set => SetAllColours(value);
+    }
+
+    /// <summary>Sets every class's colour to the same value.</summary>
+    public void SetAllColours(Rgba c)
+    {
+        Footstep = c;
+        Gunshot = c;
+        Explosion = c;
+        Vehicle = c;
+        Voice = c;
+        Other = c;
+    }
+
+    /// <summary>
+    /// The most cues drawn at once, across both sides. 0 is no limit.
+    /// </summary>
+    /// <remarks>
+    /// Loudest kept when the limit bites, so the cap drops the quietest rather than
+    /// whichever happened to be drawn first. A user in a firefight wants the gunshots,
+    /// not the first four footsteps that started talking.
+    /// </remarks>
+    public int MaxLines { get; set; } = 0;
+
+    /// <summary>
+    /// Collapse everything on a side into one cue instead of one line each.
+    /// </summary>
+    /// <remarks>
+    /// Offered because a busy fight can put a dozen cues up at once and the display
+    /// becomes a solid block that says nothing about which one mattered. The merged cue
+    /// is weighted by power and reports the loudest level, so one gunshot does not get
+    /// averaged away by five footsteps.
+    /// </remarks>
+    public bool MergeToSingleLine { get; set; }
+
+    /// <summary>The neon hue for <see cref="OverlayDisplayMode.EdgeGlow"/>, both edges.</summary>
+    public Rgba EdgeGlow { get; set; } = new(0x39, 0xFF, 0x9E, 0xD0);
+
+    /// <summary>How far an edge block reaches inward, as a fraction of screen width.</summary>
+    public double EdgeGlowWidthFraction { get; set; } = 0.045;
+
+    /// <summary>
+    /// The largest the vertical protrusion may get, as a fraction of screen height.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The cap is what keeps this mode away from the rejected first design. That one put
+    /// rear sounds in the bottom corners, over the minimap. Nothing here is placed by
+    /// front-versus-behind, so a rear sound lands at the same height as a front one - but
+    /// a very large imbalance would still spread until it reached the corners, so the
+    /// spread is bounded instead of left to run to the edge.
+    /// </para>
+    /// <para>
+    /// 0.30 of the height means the block spans at most 60% of the screen vertically,
+    /// leaving a fifth clear at the top and the bottom even at a full one-sided sound.
+    /// </para>
+    /// </remarks>
+    public double EdgeGlowMaxHalfHeightFraction { get; set; } = 0.30;
+
     /// <summary>Line thickness in pixels, before any outline.</summary>
     public double ThicknessFor(int screenWidth, int screenHeight)
         => Math.Max(3.0, LineThicknessFraction * Math.Min(screenWidth, screenHeight));
@@ -368,6 +450,24 @@ public static class OverlayLayout
 
         var thickness = Math.Max(3.0, style.LineThicknessFraction * Math.Min(screenWidth, screenHeight));
 
+        // Merging, when on, collapses each side to a single cue before anything is laid
+        // out. Done first so the cap and the merge cannot both apply to the same set and
+        // the two settings can contradict each other.
+        if (style.MergeToSingleLine)
+        {
+            foreach (var side in new[] { -1, 1 })
+            {
+                var onSide = events.Where(e => Math.CopySign(1.0, (e.Balance ?? side)) == side).ToList();
+                if (onSide.Count > 0)
+                    AddLine(result, side * 90, Brightness(onSide), onSide[0],
+                        LengthForLevel(Brightness(onSide), screenWidth, style), thickness,
+                        screenWidth, screenHeight, style);
+            }
+
+            ApplyCap(result, style);
+            return result;
+        }
+
         foreach (var e in events)
         {
             // Faint readings are dimmed, so an unreliable direction is visibly less
@@ -386,6 +486,14 @@ public static class OverlayLayout
                 // the only honest thing to show. The old behaviour - mirror it onto both
                 // edges - lit both sides at equal intensity for everything uncertain, so
                 // a grenade off to the right looked identical to a grenade in your face.
+                //
+                // The exact-zero case is separate, and not a refinement of the threshold.
+                // A floor of 0 dB turns the floor into the balance 0.0, and a strict
+                // comparison lets 0.0 through - so a perfectly even mix, which has no
+                // side at all, drew a line claiming one. Zero is the one value that is
+                // not a matter of degree: it is the absence of the thing being measured.
+                // Checked before the floor so no threshold setting can bring it back.
+                if (balance == 0.0) continue;
                 if (Math.Abs(balance) < style.BalanceFloor) continue;
 
                 var side = Math.CopySign(1.0, balance);
@@ -402,7 +510,46 @@ public static class OverlayLayout
                 screenWidth, screenHeight, style);
         }
 
+        ApplyCap(result, style);
         return result;
+    }
+
+    /// <summary>
+    /// Drops the quietest cues once there are more than <see cref="OverlayStyle.MaxLines"/>.
+    /// </summary>
+    /// <remarks>
+    /// Applied after layout, to the alpha rather than the input level, so it ranks by what
+    /// is actually painted. <c>Level</c> alone would misrank: a loud cue with poor
+    /// directional confidence is painted fainter than a quiet confident one, and the user
+    /// is comparing the two shapes they can see.
+    /// </remarks>
+    private static void ApplyCap(List<LineGeometry> result, OverlayStyle style)
+    {
+        var cap = style.MaxLines;
+        if (cap <= 0 || result.Count <= cap) return;
+
+        // Loudest first, so the survivors keep their original relative order below.
+        var keep = result.OrderByDescending(l => l.Alpha).Take(cap).ToHashSet();
+        result.RemoveAll(l => !keep.Contains(l));
+    }
+
+    /// <summary>
+    /// A representative level for a merged side: the loudest cue's, not an average.
+    /// </summary>
+    /// <remarks>
+    /// Averaging dB values is meaningless - the decibel scale is logarithmic, so the mean
+    /// of -20 and -40 dBFS is not the level of two sounds together. Taking the loudest
+    /// says "this is how much attention this side wants", which is what a merged cue is
+    /// for. The weight that <see cref="EdgeGlowLayout"/> applies to the imbalance is a
+    /// separate question and is a proper power-weighted mean there, because an imbalance
+    /// is a ratio and ratios do combine.
+    /// </remarks>
+    private static double Brightness(IReadOnlyList<AudioEvent> events)
+    {
+        var best = 0.0;
+        foreach (var e in events)
+            if (e.Level > best) best = e.Level;
+        return best;
     }
 
     private static void AddLine(

@@ -104,7 +104,8 @@ internal static class Program
 
         hotkeys.Register();
         config.Save();
-        Log.Info("running. Ctrl+Alt+Shift+B toggles, Ctrl+Alt+Shift+P switches layout, Ctrl+Alt+Shift+Q quits.");
+        Log.Info("running. Ctrl+Alt+Shift+S opens settings, Ctrl+Alt+Shift+B toggles, " +
+                 "Ctrl+Alt+Shift+P switches layout, Ctrl+Alt+Shift+Q quits.");
 
         Application.Run();
 

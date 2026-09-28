@@ -36,6 +36,8 @@ internal sealed class TrayIcon : IDisposable
         var menu = new ContextMenuStrip();
         menu.Items.Add(_statusItem);
         menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add(new ToolStripMenuItem(
+            "Settings… (Ctrl+Alt+Shift+S)", null!, (_, _) => _host.ShowSettings()));
         menu.Items.Add(_pauseItem);
         menu.Items.Add(_layoutItem);
         menu.Items.Add(new ToolStripMenuItem("Run self-test", null!, (_, _) => _host.SelfTest()));

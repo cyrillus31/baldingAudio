@@ -35,6 +35,12 @@ public sealed class AppConfig
 
     public OverlayStyle Style { get; set; } = new();
 
+    /// <summary>
+    /// Which sounds are shown. Held by reference and read by the renderer on every
+    /// frame, so a change in the settings window takes effect immediately.
+    /// </summary>
+    public SoundFilter Filter { get; set; } = new();
+
     public AudioTuning Tuning { get; set; } = new();
 
     /// <summary>Overlay refresh rate in Hz. Higher costs more GPU; 60 is ample.</summary>
@@ -91,6 +97,26 @@ public sealed class AppConfig
         catch (Exception ex)
         {
             Log.Warn($"could not write config to {path}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// The filter, always non-null.
+    /// </summary>
+    /// <remarks>
+    /// A guard rather than a default, because a config file that says <c>"filter": null</c>
+    /// deserialises to null and every later <c>config.Filter.Rule(...)</c> is a
+    /// NullReferenceException - on a property the user can only reach by hand-editing, and
+    /// thrown from the render loop. An old config with no filter key at all takes the
+    /// property initialiser instead, which is the right answer for "this predates the
+    /// feature".
+    /// </remarks>
+    public SoundFilter FilterOrDefault
+    {
+        get
+        {
+            if (Filter is null) Filter = new SoundFilter();
+            return Filter;
         }
     }
 
