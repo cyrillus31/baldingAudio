@@ -206,12 +206,19 @@ public sealed class AppHost : IDisposable
     /// all three look identical, which is a blank screen. The tray tooltip carries
     /// the same numbers, but nobody hovers a tray icon in a game.
     /// </summary>
+    /// <summary>
+    /// Whether the last heartbeat found capture healthy. Used to log a warning on the
+    /// transition into failure rather than on every second of it.
+    /// </summary>
+    private bool _lastCaptureHealthy = true;
+
     private void LogHeartbeat(double now)
     {
         if (now - _lastHeartbeat < 1.0) return;
         _lastHeartbeat = now;
 
         var mode = IsDemo ? "demo" : (_capture?.LayoutDescription ?? "no audio");
+        var captureState = CaptureState();
         var spectrum = _analyzer is null ? null : _spectrumExchange.Snapshot();
         var loudestBin = 0;
         var loudest = 0.0;
@@ -229,9 +236,62 @@ public sealed class AppHost : IDisposable
             : "silent          ";
 
         Log.Info(
-            $"{mode} | peak {_lastDbfs,6:F0} dBFS | floor {_lastNoiseFloorDb,6:F0} dBFS | " +
+            $"{mode} | {captureState} | peak {_lastDbfs,6:F0} dBFS | floor {_lastNoiseFloorDb,6:F0} dBFS | " +
             $"events {Interlocked.Read(ref _eventsSeen)} | lines {_tracker.Visible.Count} | " +
             $"loudest {where} | {_framesDrawn} frames");
+
+        WarnIfCaptureUnhealthy();
+    }
+
+    /// <summary>
+    /// A short description of capture liveness, for the heartbeat line.
+    ///
+    /// This exists because the heartbeat used to say nothing about the capture thread,
+    /// and the thread can die. That was the whole of open problem 1: the log showed
+    /// frames climbing and events frozen, and "the log is still ticking" was read as
+    /// proof the pipeline was healthy. It is not - the heartbeat is driven by the UI
+    /// timer and would tick just as happily with no audio behind it. The line has to
+    /// name the state of the thread that gets the audio, or it proves nothing.
+    /// </summary>
+    private string CaptureState()
+    {
+        var capture = _capture;
+        if (IsDemo) return "capture demo   ";
+        if (capture is null) return "capture none    ";
+
+        var restarts = capture.RestartCount;
+        var suffix = restarts > 0 ? $" restarts {restarts}" : "";
+
+        if (capture.LastFailure is { } failure) return $"capture FAILED {failure}";
+        if (!capture.IsRunning) return "capture stopped " + suffix;
+        if (!capture.IsHealthy) return $"capture STALLED{suffix}";
+        return $"capture ok{suffix}";
+    }
+
+    /// <summary>
+    /// Warns once when capture goes bad, and once when it comes back.
+    ///
+    /// Rate-limited because the heartbeat runs every second and a dead capture is
+    /// otherwise perfectly stable: without this it would write the same warning 3600
+    /// times an hour and bury the lines that matter.
+    /// </summary>
+    private void WarnIfCaptureUnhealthy()
+    {
+        var healthy = IsDemo || (_capture is { IsRunning: true, IsHealthy: true, LastFailure: null });
+        if (healthy == _lastCaptureHealthy) return;
+
+        _lastCaptureHealthy = healthy;
+        if (healthy)
+        {
+            if (_capture is not null)
+                Log.Info($"capture healthy again after {_capture.RestartCount} restart(s)");
+            return;
+        }
+
+        Log.Warn(
+            $"capture is not healthy: {CaptureState()}. " +
+            "The overlay will stay blank until audio flows; it will recover on its own " +
+            "if the endpoint can be re-opened.");
     }
 
     private void RaiseStatus()

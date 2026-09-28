@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Runtime.InteropServices;
 
 namespace BaldingAudio.App.Audio;
@@ -48,13 +49,50 @@ internal static class InteropSelfCheck
         ["AUDCLNT_STREAMFLAGS_NOPERSIST"] = 0x00080000,
     };
 
-    private static readonly Dictionary<string, int> SdkHresults = new()
+    /// <summary>
+    /// The code numbers exactly as audioclient.h writes them, and nothing else.
+    ///
+    /// <para>
+    /// This table used to hold finished HRESULTs - 0x88890008 for
+    /// AUDCLNT_E_DEVICE_INVALIDATED and so on - and compared them against
+    /// declarations that were wrong in the same way, so it passed. It was checking
+    /// one piece of transcription against another piece of transcription, which is
+    /// exactly the mistake it was written to catch. Three of the four were wrong, and
+    /// the one that actually occurred in the field
+    /// (<c>AUDCLNT_E_DEVICE_INVALIDATED</c>) was among them.
+    /// </para>
+    /// <para>
+    /// The header's own form is <c>AUDCLNT_ERR(0x004)</c>: the code number is the
+    /// whole of the information, and the HRESULT is <c>0x88890000 | code</c>
+    /// (<c>0x08890000 | code</c> for S_ codes). Storing only the code number means
+    /// the base cannot be transposed, and the arithmetic below is what the SDK's
+    /// macro does.
+    /// </para>
+    /// </summary>
+    private static readonly Dictionary<string, int> SdkHresultCodes = new()
     {
-        ["AUDCLNT_S_BUFFER_EMPTY"] = unchecked((int)0x08890001),
-        ["AUDCLNT_E_DEVICE_INVALIDATED"] = unchecked((int)0x88890008),
-        ["AUDCLNT_E_UNSUPPORTED_FORMAT"] = unchecked((int)0x88890014),
-        ["AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED"] = unchecked((int)0x8889001A),
+        ["AUDCLNT_S_BUFFER_EMPTY"] = 0x001,
+        ["AUDCLNT_E_NOT_INITIALIZED"] = 0x001,
+        ["AUDCLNT_E_WRONG_ENDPOINT_TYPE"] = 0x003,
+        ["AUDCLNT_E_DEVICE_INVALIDATED"] = 0x004,
+        ["AUDCLNT_E_NOT_STOPPED"] = 0x005,
+        ["AUDCLNT_E_BUFFER_TOO_LARGE"] = 0x006,
+        ["AUDCLNT_E_OUT_OF_ORDER"] = 0x007,
+        ["AUDCLNT_E_UNSUPPORTED_FORMAT"] = 0x008,
+        ["AUDCLNT_E_INVALID_SIZE"] = 0x009,
+        ["AUDCLNT_E_DEVICE_IN_USE"] = 0x00a,
+        ["AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED"] = 0x00e,
+        ["AUDCLNT_E_ENDPOINT_CREATE_FAILED"] = 0x00f,
+        ["AUDCLNT_E_SERVICE_NOT_RUNNING"] = 0x010,
+        ["AUDCLNT_E_BUFFER_ERROR"] = 0x018,
+        ["AUDCLNT_E_RESOURCES_INVALIDATED"] = 0x026,
     };
+
+    /// <summary>Expands a code number the way the SDK's AUDCLNT_ERR macro does.</summary>
+    private static int Expand(string name, int code)
+        => name.StartsWith("AUDCLNT_S_", StringComparison.Ordinal)
+            ? unchecked((int)0x08890000) | code
+            : unchecked((int)0x88890000) | code;
 
     public static IReadOnlyList<Check> RunAll(Action<string>? log = null)
     {
@@ -64,6 +102,7 @@ internal static class InteropSelfCheck
             CheckIids(),
             CheckFlags(),
             CheckHresults(),
+            CheckRecoverableClassification(),
             CheckWaveFormatTag(),
         };
 
@@ -148,22 +187,108 @@ internal static class InteropSelfCheck
         var actual = new Dictionary<string, int>
         {
             ["AUDCLNT_S_BUFFER_EMPTY"] = MMDevice.AUDCLNT_S_BUFFER_EMPTY,
+            ["AUDCLNT_E_NOT_INITIALIZED"] = MMDevice.AUDCLNT_E_NOT_INITIALIZED,
+            ["AUDCLNT_E_WRONG_ENDPOINT_TYPE"] = MMDevice.AUDCLNT_E_WRONG_ENDPOINT_TYPE,
             ["AUDCLNT_E_DEVICE_INVALIDATED"] = MMDevice.AUDCLNT_E_DEVICE_INVALIDATED,
+            ["AUDCLNT_E_NOT_STOPPED"] = MMDevice.AUDCLNT_E_NOT_STOPPED,
+            ["AUDCLNT_E_BUFFER_TOO_LARGE"] = MMDevice.AUDCLNT_E_BUFFER_TOO_LARGE,
+            ["AUDCLNT_E_OUT_OF_ORDER"] = MMDevice.AUDCLNT_E_OUT_OF_ORDER,
             ["AUDCLNT_E_UNSUPPORTED_FORMAT"] = MMDevice.AUDCLNT_E_UNSUPPORTED_FORMAT,
+            ["AUDCLNT_E_INVALID_SIZE"] = MMDevice.AUDCLNT_E_INVALID_SIZE,
+            ["AUDCLNT_E_DEVICE_IN_USE"] = MMDevice.AUDCLNT_E_DEVICE_IN_USE,
             ["AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED"] = MMDevice.AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED,
+            ["AUDCLNT_E_ENDPOINT_CREATE_FAILED"] = MMDevice.AUDCLNT_E_ENDPOINT_CREATE_FAILED,
+            ["AUDCLNT_E_SERVICE_NOT_RUNNING"] = MMDevice.AUDCLNT_E_SERVICE_NOT_RUNNING,
+            ["AUDCLNT_E_BUFFER_ERROR"] = MMDevice.AUDCLNT_E_BUFFER_ERROR,
+            ["AUDCLNT_E_RESOURCES_INVALIDATED"] = MMDevice.AUDCLNT_E_RESOURCES_INVALIDATED,
         };
 
         var bad = new List<string>();
-        foreach (var (name, expected) in SdkHresults)
+        foreach (var (name, code) in SdkHresultCodes)
         {
+            var expected = Expand(name, code);
             if (!actual.TryGetValue(name, out var got)) { bad.Add($"{name} missing"); continue; }
-            if (got != expected) bad.Add($"{name} is 0x{got:X8}, SDK says 0x{expected:X8}");
+            if (got != expected)
+                bad.Add($"{name} is 0x{(uint)got:X8}, SDK says AUDCLNT_{(name.StartsWith("AUDCLNT_S_", StringComparison.Ordinal) ? "SUCCESS" : "ERR")}(0x{code:X3}) = 0x{(uint)expected:X8}");
         }
 
         return bad.Count == 0
-            ? new("audio HRESULTs match the SDK", true, $"{SdkHresults.Count} checked")
+            ? new("audio HRESULTs match the SDK", true, $"{SdkHresultCodes.Count} checked")
             : new("audio HRESULTs match the SDK", false,
                 string.Join("; ", bad) + ". A wrong HRESULT makes normal operation look like a failure.");
+    }
+
+    /// <summary>
+    /// The recoverable failures must actually be classified as recoverable.
+    ///
+    /// This is the check that would have caught the bug in the field. The capture loop
+    /// treated every exception as fatal, so when the endpoint was invalidated the
+    /// thread exited and the overlay went permanently blank while the process stayed
+    /// alive and the heartbeat kept ticking. The classification table below is the
+    /// thing that has to be right for recovery to happen at all, and it was only
+    /// introduced along with that recovery - so there was nothing to check before.
+    /// </summary>
+    private static Check CheckRecoverableClassification()
+    {
+        var expected = new Dictionary<string, bool>
+        {
+            // The endpoint was reconfigured or removed. Recoverable by re-opening it,
+            // which is the only way out, and the one that actually happened.
+            ["AUDCLNT_E_DEVICE_INVALIDATED"] = true,
+            ["AUDCLNT_E_RESOURCES_INVALIDATED"] = true,
+            ["AUDCLNT_E_SERVICE_NOT_RUNNING"] = true,
+            ["AUDCLNT_E_BUFFER_ERROR"] = true,
+            ["AUDCLNT_E_OUT_OF_ORDER"] = true,
+
+            // Not transient. Retrying forever would just spin on a condition that
+            // needs a different endpoint or a different format.
+            ["AUDCLNT_E_UNSUPPORTED_FORMAT"] = false,
+            ["AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED"] = false,
+            ["AUDCLNT_E_NOT_INITIALIZED"] = false,
+        };
+
+        var bad = new List<string>();
+        foreach (var (name, want) in expected)
+        {
+            if (!TryGetHresult(name, out var hr))
+            {
+                bad.Add($"{name} is not declared");
+                continue;
+            }
+
+            // The real failure, not the description of it. A string comparison would
+            // pass on any log line that merely mentions the code, which is the check
+            // the first version of this made and it proved nothing.
+            var got = WasapiLoopbackCapture.IsRecoverableFailure(hr);
+            if (got != want)
+                bad.Add($"{MMDevice.DescribeHresult(hr)} (0x{(uint)hr:X8}) classified " +
+                        $"{(got ? "recoverable" : "fatal")}, expected {(want ? "recoverable" : "fatal")}");
+        }
+
+        return bad.Count == 0
+            ? new("recoverable audio failures are classified as recoverable", true, $"{expected.Count} checked")
+            : new("recoverable audio failures are classified as recoverable", false,
+                string.Join("; ", bad) +
+                ". A failure classified fatal silently ends capture, which looks exactly like a dead overlay.");
+    }
+
+    /// <summary>
+    /// Reads a declared HRESULT field by name. Reflection, not a switch: these are
+    /// <c>static readonly</c> fields rather than consts, because the SDK writes them
+    /// as macro expansions and a switch on them would not compile as case labels.
+    /// </summary>
+    private static bool TryGetHresult(string name, out int hr)
+    {
+        var field = typeof(MMDevice).GetField(name,
+            BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Static);
+        if (field?.GetValue(null) is int value)
+        {
+            hr = value;
+            return true;
+        }
+
+        hr = 0;
+        return false;
     }
 
     private static Check CheckWaveFormatTag()

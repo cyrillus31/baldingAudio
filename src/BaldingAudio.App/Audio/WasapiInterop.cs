@@ -243,10 +243,79 @@ internal static class MMDevice
         new("BCDE0395-E52F-467C-8E3D-C4579291692E");
 
     internal const int CLSCTX_ALL = 23;
-    internal const int AUDCLNT_S_BUFFER_EMPTY = unchecked((int)0x08890001);
-    internal const int AUDCLNT_E_DEVICE_INVALIDATED = unchecked((int)0x88890008);
-    internal const int AUDCLNT_E_UNSUPPORTED_FORMAT = unchecked((int)0x88890014);
-    internal const int AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED = unchecked((int)0x8889001A);
+
+    // --- HRESULTs -------------------------------------------------------------
+    //
+    // The SDK does not write these as literals. audioclient.h says:
+    //
+    //     #define AUDCLNT_ERR(n) MAKE_HRESULT(SEVERITY_ERROR, FACILITY_AUDCLNT, n)
+    //     #define AUDCLNT_E_DEVICE_INVALIDATED         AUDCLNT_ERR(0x004)
+    //     #define AUDCLNT_E_UNSUPPORTED_FORMAT         AUDCLNT_ERR(0x008)
+    //     #define AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED AUDCLNT_ERR(0x00e)
+    //
+    // so the code number is the whole of the information, and the HRESULT is
+    // 0x88890000 | code (0x08890000 | code for the S_ success range). Spelling the
+    // full constants out by hand is what made them wrong before: DEVICE_INVALIDATED
+    // was written as 0x88890008, which is UNSUPPORTED_FORMAT, and
+    // EXCLUSIVE_MODE_NOT_ALLOWED as 0x8889001A, which is not an AUDCLNT code at all.
+    // InteropSelfCheck could not catch it because it compared the declarations
+    // against a table of the same wrong values - it checked transcription against
+    // transcription.
+    //
+    // So the *code numbers* are what get written here, matching the header's own
+    // 0x004 style, and the HRESULT is derived. Reading them next to the header now
+    // means comparing a number with a number.
+    private const int AUDCLNT_FACILITY = unchecked((int)0x88890000);
+    private const int AUDCLNT_FACILITY_SUCCESS = unchecked((int)0x08890000);
+
+    private static int AudclntErr(int code) => AUDCLNT_FACILITY | code;
+    private static int AudclntSuccess(int code) => AUDCLNT_FACILITY_SUCCESS | code;
+
+    internal static readonly int AUDCLNT_S_BUFFER_EMPTY = AudclntSuccess(0x001);
+    internal static readonly int AUDCLNT_E_NOT_INITIALIZED = AudclntErr(0x001);
+    internal static readonly int AUDCLNT_E_WRONG_ENDPOINT_TYPE = AudclntErr(0x003);
+    internal static readonly int AUDCLNT_E_DEVICE_INVALIDATED = AudclntErr(0x004);
+    internal static readonly int AUDCLNT_E_NOT_STOPPED = AudclntErr(0x005);
+    internal static readonly int AUDCLNT_E_BUFFER_TOO_LARGE = AudclntErr(0x006);
+    internal static readonly int AUDCLNT_E_OUT_OF_ORDER = AudclntErr(0x007);
+    internal static readonly int AUDCLNT_E_UNSUPPORTED_FORMAT = AudclntErr(0x008);
+    internal static readonly int AUDCLNT_E_INVALID_SIZE = AudclntErr(0x009);
+    internal static readonly int AUDCLNT_E_DEVICE_IN_USE = AudclntErr(0x00a);
+    internal static readonly int AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED = AudclntErr(0x00e);
+    internal static readonly int AUDCLNT_E_ENDPOINT_CREATE_FAILED = AudclntErr(0x00f);
+    internal static readonly int AUDCLNT_E_SERVICE_NOT_RUNNING = AudclntErr(0x010);
+    internal static readonly int AUDCLNT_E_RESOURCES_INVALIDATED = AudclntErr(0x026);
+    internal static readonly int AUDCLNT_E_BUFFER_ERROR = AudclntErr(0x018);
+
+    /// <summary>
+    /// A readable name for an audio HRESULT, for the log.
+    ///
+    /// The capture loop used to log the bare hex ("capture loop error: 0x88890004"),
+    /// which cost an evening of guesswork: nothing says which condition that is, and
+    /// a surprising number of them are recoverable. Names turn "the overlay went
+    /// blank" into "the device was invalidated, re-opening it".
+    /// </summary>
+    private static readonly Dictionary<int, string> HresultNames = new()
+    {
+        [AUDCLNT_S_BUFFER_EMPTY] = "AUDCLNT_S_BUFFER_EMPTY",
+        [AUDCLNT_E_NOT_INITIALIZED] = "AUDCLNT_E_NOT_INITIALIZED",
+        [AUDCLNT_E_WRONG_ENDPOINT_TYPE] = "AUDCLNT_E_WRONG_ENDPOINT_TYPE",
+        [AUDCLNT_E_DEVICE_INVALIDATED] = "AUDCLNT_E_DEVICE_INVALIDATED",
+        [AUDCLNT_E_NOT_STOPPED] = "AUDCLNT_E_NOT_STOPPED",
+        [AUDCLNT_E_BUFFER_TOO_LARGE] = "AUDCLNT_E_BUFFER_TOO_LARGE",
+        [AUDCLNT_E_OUT_OF_ORDER] = "AUDCLNT_E_OUT_OF_ORDER",
+        [AUDCLNT_E_UNSUPPORTED_FORMAT] = "AUDCLNT_E_UNSUPPORTED_FORMAT",
+        [AUDCLNT_E_INVALID_SIZE] = "AUDCLNT_E_INVALID_SIZE",
+        [AUDCLNT_E_DEVICE_IN_USE] = "AUDCLNT_E_DEVICE_IN_USE",
+        [AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED] = "AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED",
+        [AUDCLNT_E_ENDPOINT_CREATE_FAILED] = "AUDCLNT_E_ENDPOINT_CREATE_FAILED",
+        [AUDCLNT_E_SERVICE_NOT_RUNNING] = "AUDCLNT_E_SERVICE_NOT_RUNNING",
+        [AUDCLNT_E_BUFFER_ERROR] = "AUDCLNT_E_BUFFER_ERROR",
+        [AUDCLNT_E_RESOURCES_INVALIDATED] = "AUDCLNT_E_RESOURCES_INVALIDATED",
+    };
+
+    public static string DescribeHresult(int hr)
+        => HresultNames.TryGetValue(hr, out var name) ? name : $"0x{(uint)hr:X8}";
 
     public static IMMDeviceEnumerator CreateEnumerator()
     {
