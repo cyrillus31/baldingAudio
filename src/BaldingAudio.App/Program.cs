@@ -44,7 +44,15 @@ internal static class Program
             var interop = Audio.InteropSelfCheck.RunAll(Console.WriteLine);
             var interopOk = Audio.InteropSelfCheck.AllPassed(interop);
 
-            var ok = coreOk && interopOk;
+            // The capture-to-UI handoff, also here rather than in Core: SpectrumExchange
+            // is App code. A fault in it is reported as a broken analyser, which is how a
+            // stale-buffer bug was mistaken for a DSP problem in the first place.
+            Console.WriteLine();
+            Console.WriteLine("Capture handoff:");
+            var handoff = AppSelfCheck.RunAll(Console.WriteLine);
+            var handoffOk = AppSelfCheck.AllPassed(handoff);
+
+            var ok = coreOk && interopOk && handoffOk;
             Console.WriteLine(ok ? "\nALL PASSED" : "\nFAILURES PRESENT");
             return ok ? 0 : 1;
         }

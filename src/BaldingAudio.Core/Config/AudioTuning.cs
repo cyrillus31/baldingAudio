@@ -19,7 +19,19 @@ public sealed class AudioTuning
     /// <summary>Hz. Upper edge of the high band. Gunfire crack and surface detail.</summary>
     public double HighBandCeilingHz { get; set; } = 7000;
 
-    /// <summary>dBFS. Below this, nothing is shown. Low enough to catch distant movement.</summary>
+    /// <summary>
+    /// dBFS. Below this, nothing is shown. Low enough to catch distant movement.
+    ///
+    /// <para>
+    /// Left at -72 deliberately, and worth not "fixing" on the strength of the log's
+    /// <c>loudest silent</c> lines. Those were measured against a median peak of
+    /// -28 dBFS - forty-four dB above this floor - while events were still being
+    /// emitted. The spectrum was not below the floor; it was arriving empty. That was
+    /// <see cref="App.SpectrumExchange"/> publishing a stale zero-filled buffer on
+    /// alternating frames, and it is fixed there. Loosening this would only have made
+    /// noise visible, which is the opposite of what was wanted.
+    /// </para>
+    /// </summary>
     public double DisplayFloorDb { get; set; } = -72;
 
     /// <summary>dBFS. At or above this a bar is drawn at full length.</summary>
