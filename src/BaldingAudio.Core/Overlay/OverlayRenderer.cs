@@ -81,9 +81,7 @@ public sealed class OverlayRenderer
             if (b.Alpha <= 0.004 || b.Width <= 0 || b.HalfHeight <= 0) continue;
 
             // Soft edges, because a hard rectangle reads as a UI panel pasted over the
-            // game rather than a glow. The falloff is at the inner end and the two sides,
-            // not the outer one: the outer edge is where the block meets the screen border
-            // and a fade there would look like a mistake.
+            // game rather than a glow.
             var w = (float)b.Width;
             var h = (float)b.HalfHeight;
             var x = (float)b.X;
@@ -93,11 +91,15 @@ public sealed class OverlayRenderer
             // double and the two FillGlow calls below stop agreeing on a type.
             var feather = Math.Max(1f, Math.Min(w, h) * 0.45f);
 
+            // For left blocks, make the glow brightest at the screen edge and fade inward.
+            // For right blocks, keep the original falloff.
+            var brightAtOuter = b.Side < 0;
+
             if (outlineWidth >= 0.5f)
                 FillGlow(buffer, x, y, w + outlineWidth * 2, h + outlineWidth * 2,
-                    _style.OutlineFor(b.Colour), b.Alpha, feather + outlineWidth);
+                    _style.OutlineFor(b.Colour), b.Alpha, feather + outlineWidth, brightAtOuter);
 
-            FillGlow(buffer, x, y, w, h, b.Colour, b.Alpha, feather);
+            FillGlow(buffer, x, y, w, h, b.Colour, b.Alpha, feather, brightAtOuter);
         }
     }
 
@@ -111,7 +113,8 @@ public sealed class OverlayRenderer
     /// different renderer from the game.
     /// </remarks>
     private static void FillGlow(
-        PixelBuffer buffer, float cx, float cy, float w, float h, Rgba colour, double alpha, float feather)
+        PixelBuffer buffer, float cx, float cy, float w, float h, Rgba colour, double alpha, float feather,
+        bool brightAtOuter)
     {
         var top = (int)Math.Floor(cy - h);
         var bottom = (int)Math.Ceiling(cy + h);
@@ -127,15 +130,18 @@ public sealed class OverlayRenderer
         {
             // Distance from the block's vertical centre, 0 at the middle and 1 at the edge.
             var dv = Math.Abs(y + 0.5f - cy) / Math.Max(1e-3f, h);
-            var vertical = 1.0f - Smooth(dv);
+            var vertical = Smooth(dv);
             if (vertical <= 0f) continue;
 
             for (var x = left; x < right; x++)
             {
-                var dx = (x + 0.5f - cx) / Math.Max(1e-3f, w);
-                // Brightest at the screen edge, fading out toward the middle of the
-                // screen, so the block reads as emanating from the border.
-                var horizontal = 1.0f - Smooth(dx);
+                // Distance from the block's left edge, 0 at the border and 1 at the inner edge.
+                // For left blocks, dx=0 is the screen edge; for right blocks it is the inner edge.
+                var dx = (x + 0.5f - left) / Math.Max(1e-3f, w);
+
+                // Brightest at the screen edge (outer end), fading toward the middle (inner end).
+                // dx runs from the block's left edge: it is outer for left blocks, inner for right blocks.
+                var horizontal = brightAtOuter ? Smooth(dx) : 1.0f - Smooth(dx);
                 var a = alpha * vertical * horizontal;
                 if (a <= 0.004) continue;
                 buffer.Blend(x, y, colour, (float)a);

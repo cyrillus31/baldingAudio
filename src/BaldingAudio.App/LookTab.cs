@@ -9,29 +9,22 @@ namespace BaldingAudio.App;
 /// The Look tab: colours, how far cues come in from the edges, how many there are, and
 /// which of the two display modes to use.
 /// </summary>
-/// <remarks>
-/// <para>
-/// Every control writes straight into the live config object, and the preview beside it
-/// is drawn by the real renderer from that same object. There is no apply step and no
-/// copy, so what is on screen is what will be over the game - including the moment
-/// mid-drag, which is when a user actually judges a value.
-/// </para>
-/// </remarks>
 internal sealed class LookTab
 {
     private readonly AppConfig _config;
     private readonly AppHost _host;
     private readonly PreviewPanel _preview;
     private readonly List<Action> _refreshers = new();
+    private readonly Panel _leftPanel;
 
     public LookTab(AppConfig host_config, AppHost host, PreviewPanel preview)
     {
         _config = host_config;
         _host = host;
         _preview = preview;
+        _leftPanel = new Panel { Dock = DockStyle.Fill, AutoScroll = true, BackColor = Color.FromArgb(45, 45, 48) };
     }
 
-    /// <summary>Builds the tab's controls and returns the panel to drop into the tab strip.</summary>
     public Control Build()
     {
         var root = new TableLayoutPanel
@@ -39,20 +32,67 @@ internal sealed class LookTab
             Dock = DockStyle.Fill,
             ColumnCount = 2,
             Padding = new Padding(10),
+            BackColor = Color.FromArgb(45, 45, 48),
         };
 
-        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 400));
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 360));
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
 
-        var left = new Panel { Dock = DockStyle.Fill, AutoScroll = true };
         var y = 0;
 
-        // --- mode -------------------------------------------------------------------
-        y = Group(left, y, "How cues are shown");
+        // --- casual mode ------------------------------------------------------------------------------
+        var casualPanel = new Panel { Bounds = new Rectangle(0, y, 360, 50), BackColor = Color.Transparent };
+        
+        var casualLabel = new Label {
+            Bounds = new Rectangle(0, 5, 150, 20),
+            Text = "Casual mode",
+            Font = new Font("Segoe UI", 9f, FontStyle.Bold),
+            ForeColor = Color.LightGreen,
+            BackColor = Color.Transparent,
+        };
+        casualPanel.Controls.Add(casualLabel);
 
-        var mode = new ComboBox { Width = 250, DropDownStyle = ComboBoxStyle.DropDownList };
-        mode.Items.Add("Lines from the edges (default)");
-        mode.Items.Add("Neon blocks on the edges");
+        var casualCombo = new ComboBox {
+            Width = 180,
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            BackColor = Color.FromArgb(60, 60, 60),
+            ForeColor = Color.White,
+            Location = new Point(156, 2),
+        };
+        casualCombo.Items.Add("Simple (casual)");
+        casualCombo.Items.Add("Advanced (full control)");
+        casualCombo.SelectedIndex = _config.CasualMode ? 0 : 1;
+        casualCombo.SelectedIndexChanged += (_, _) =>
+        {
+            _config.CasualMode = casualCombo.SelectedIndex == 0;
+            UpdateCasualMode();
+            Refresh();
+        };
+        casualPanel.Controls.Add(casualCombo);
+
+        var casualHelp = new Label {
+            Bounds = new Rectangle(0, 32, 360, 18),
+            Text = "Simple: hides advanced sliders, keeps defaults that work for most games.",
+            Font = new Font("Segoe UI", 7.5f),
+            ForeColor = Color.LightGray,
+            BackColor = Color.Transparent,
+        };
+        casualPanel.Controls.Add(casualHelp);
+
+        _leftPanel.Controls.Add(casualPanel);
+        y += 54;
+
+        // --- mode -------------------------------------------------------------------
+        y = Group(_leftPanel, y, "Display mode");
+
+        var mode = new ComboBox { 
+            Width = 260, 
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            BackColor = Color.FromArgb(60, 60, 60),
+            ForeColor = Color.White,
+        };
+        mode.Items.Add("Lines from edges");
+        mode.Items.Add("Neon blocks");
         mode.SelectedIndex = _config.Style.DisplayMode == OverlayDisplayMode.EdgeGlow ? 1 : 0;
         mode.SelectedIndexChanged += (_, _) =>
         {
@@ -62,122 +102,141 @@ internal sealed class LookTab
             _host.SelfTest();
             Refresh();
         };
-        y = Control(left, y, "Mode", mode);
+        y = Control(_leftPanel, y, "Mode", mode);
 
         var modeNote = new Label
         {
-            Width = 370,
-            Height = 44,
-            ForeColor = SystemColors.GrayText,
+            Width = 340,
+            Height = 50,
+            ForeColor = Color.LightGray,
+            Font = new Font("Segoe UI", 8f),
+            BackColor = Color.Transparent,
         };
         modeNote.Text = _config.Style.DisplayMode == OverlayDisplayMode.EdgeGlow
-            ? "A block on the left or right edge, centred on the middle of the screen, growing " +
-              "symmetrically up and down and inward. The vertical size shows how big the " +
-              "difference between your ears is. Both edges use the same colour."
-            : "Horizontal lines running inward from the left and right edges. Length is how far " +
-              "off to one side the sound is. Height is in front or behind.";
-        left.Controls.Add(modeNote);
-        y += 48;
+            ? "• Left block = left ear louder, right block = right ear louder.\n" +
+              "• Brightest at screen edge, fades toward center.\n" +
+              "• Vertical size = how much louder one ear is."
+            : "• Lines start at left/right edges and run inward.\n" +
+              "• Line length = how much louder one ear is.\n" +
+              "• Height shows front (top) vs behind (bottom).";
+        _leftPanel.Controls.Add(modeNote);
+        y += 54;
 
         // --- colour -----------------------------------------------------------------
-        y = Group(left, y, "Colour");
+        y = Group(_leftPanel, y, "Appearance");
 
-        y = ColourRow(left, y, "Cue colour", () => _config.Style.IndicatorColour,
+        y = ColourRow(_leftPanel, y, "Cue colour", () => _config.Style.IndicatorColour,
             c => { _config.Style.SetAllColours(c); }, "All sound types.");
 
         if (_config.Style.DisplayMode == OverlayDisplayMode.EdgeGlow)
-            y = ColourRow(left, y, "Neon colour", () => _config.Style.EdgeGlow,
-                c => _config.Style.EdgeGlow = c, "Used on both edges in neon mode.");
+            y = ColourRow(_leftPanel, y, "Neon colour", () => _config.Style.EdgeGlow,
+                c => _config.Style.EdgeGlow = c, "Used on both edges.");
 
-        y = Slider(left, y, "Outline width", () => _config.Style.OutlineWidthFraction,
+        y = Slider(_leftPanel, y, "Outline width", () => _config.Style.OutlineWidthFraction,
             v => _config.Style.OutlineWidthFraction = v, 0, 1.5, 0.05, "",
-            "A lighter rim of the same colour, so a line is visible against a dark scene. 0 turns it off.");
+            "0 = no outline.\n0.55 = default (lighter rim visible on dark scenes).",
+            isAdvanced: true);
 
-        y = Slider(left, y, "Outline lighten", () => _config.Style.OutlineLighten,
+        y = Slider(_leftPanel, y, "Outline lightness", () => _config.Style.OutlineLighten,
             v => _config.Style.OutlineLighten = v, 0, 1, 0.05, "",
-            "How far the rim is pushed toward white. Keeps it the same hue.");
+            "0 = stays same colour.\n1 = turns white.\n0.55 = default (lighter rim keep hue).",
+            isAdvanced: true);
+
+        // --- spacing ----------------------------------------------------------------
+        y += 8;
 
         // --- how far in --------------------------------------------------------------
-        y = Group(left, y, "How far cues come in from the edge");
+        y = Group(_leftPanel, y, "Position");
 
-        y = Slider(left, y, "Inset from side", () => _config.Style.SideInsetFraction,
-            v => _config.Style.SideInsetFraction = v, 0, 0.08, 0.001, "of the short side",
-            "Raise this to keep cues clear of a game's own icons in the corners.");
+        y = Slider(_leftPanel, y, "Side inset", () => _config.Style.SideInsetFraction,
+            v => _config.Style.SideInsetFraction = v, 0, 0.08, 0.001, "",
+            "0 = cues on screen edge.\n0.08 = pulled in to avoid game UI.",
+            isAdvanced: true);
 
-        y = Slider(left, y, "Inset top and bottom", () => _config.Style.FieldInsetFraction,
-            v => _config.Style.FieldInsetFraction = v, 0, 0.25, 0.005, "of the short side",
-            "Keeps sounds in front and directly behind clear of the screen edges.");
+        y = Slider(_leftPanel, y, "Top/bottom inset", () => _config.Style.FieldInsetFraction,
+            v => _config.Style.FieldInsetFraction = v, 0, 0.25, 0.005, "",
+            "0 = on screen edges.\n0.25 = pulled far from edges.",
+            isAdvanced: true);
 
-        y = Slider(left, y, "Band height", () => _config.Style.FieldRadiusYFraction,
+        y = Slider(_leftPanel, y, "Band height", () => _config.Style.FieldRadiusYFraction,
             v => _config.Style.FieldRadiusYFraction = v, 0.4, 1.0, 0.01, "",
-            "How much of the screen height the up-and-down range covers.");
+            "0.4 = narrow vertical range.\n1.0 = full screen height for front/behind.",
+            isAdvanced: true);
 
         // --- how many ----------------------------------------------------------------
-        y = Group(left, y, "How many at once");
+        y += 8;
+        y = Group(_leftPanel, y, "Cue limits");
 
-        y = Slider(left, y, "Most lines", () => _config.Style.MaxLines,
+        y = Slider(_leftPanel, y, "Max cues", () => _config.Style.MaxLines,
             v => _config.Style.MaxLines = (int)Math.Round(v), 0, 12, 1, "",
-            "0 means no limit. Above the limit the loudest are kept, so a firefight shows " +
-            "gunshots rather than whichever footsteps started first.");
+            "0 = no limit (all cues show).\n12 = show at most 12 cues, loudest wins.");
 
         var merge = new CheckBox
         {
-            Text = "Collapse each side into one line",
-            Width = 370,
+            Text = "Merge cues on same side",
+            Width = 340,
             Height = 22,
             Checked = _config.Style.MergeToSingleLine,
+            Font = new Font("Segoe UI", 9f),
+            BackColor = Color.Transparent,
+            ForeColor = Color.White,
         };
         merge.CheckedChanged += (_, _) =>
         {
             _config.Style.MergeToSingleLine = merge.Checked;
             Refresh();
         };
-        left.Controls.Add(merge);
+        _leftPanel.Controls.Add(merge);
         y += 26;
 
         var mergeNote = new Label
         {
-            Width = 370,
-            Height = 32,
-            ForeColor = SystemColors.GrayText,
-            Text = "Everything on one side becomes a single cue, taking the loudest level. " +
-                   "Useful when a lot is happening and the lines have started to blur together.",
+            Width = 340,
+            Height = 26,
+            ForeColor = Color.LightGray,
+            Font = new Font("Segoe UI", 8f),
+            BackColor = Color.Transparent,
+            Text = "All cues on one side become a single merged block showing loudest cue.",
         };
-        left.Controls.Add(mergeNote);
-        y += 36;
+        _leftPanel.Controls.Add(mergeNote);
+        y += 30;
 
         // --- neon geometry, only relevant in that mode --------------------------------
         if (_config.Style.DisplayMode == OverlayDisplayMode.EdgeGlow)
         {
-            y = Group(left, y, "Neon blocks");
+            y += 8;
+            y = Group(_leftPanel, y, "Neon block size");
 
-            y = Slider(left, y, "Reach inward", () => _config.Style.EdgeGlowWidthFraction,
-                v => _config.Style.EdgeGlowWidthFraction = v, 0.01, 0.20, 0.005, "of the width",
-                "How far a block comes in from its edge at full size.");
+            y = Slider(_leftPanel, y, "Width (inward)", () => _config.Style.EdgeGlowWidthFraction,
+                v => _config.Style.EdgeGlowWidthFraction = v, 0.01, 0.20, 0.005, "",
+                "How wide block extends from edge (0.01 = thin, 0.20 = very wide).",
+                isAdvanced: true);
 
-            y = Slider(left, y, "Spread up and down", () => _config.Style.EdgeGlowMaxHalfHeightFraction,
-                v => _config.Style.EdgeGlowMaxHalfHeightFraction = v, 0.05, 0.45, 0.01, "of the height",
-                "The most a block can spread either side of the centre. Kept below half so it " +
-                "never reaches the corners where the game's own icons are.");
+            y = Slider(_leftPanel, y, "Height (max spread)", () => _config.Style.EdgeGlowMaxHalfHeightFraction,
+                v => _config.Style.EdgeGlowMaxHalfHeightFraction = v, 0.05, 0.45, 0.01, "",
+                "Max vertical spread (0.05 = small, 0.45 = huge).\nKept below corners so minimap/ammo UI isn't covered.",
+                isAdvanced: true);
         }
 
-        left.Height = y + 20;
-        root.Controls.Add(left, 0, 0);
+        _leftPanel.Height = y + 20;
+        root.Controls.Add(_leftPanel, 0, 0);
 
         // --- preview ------------------------------------------------------------------
-        var right = new Panel { Dock = DockStyle.Fill };
+        var right = new Panel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(25, 25, 27) };
         _preview.Dock = DockStyle.Fill;
         _preview.ShowGuides = true;
+        _preview.BackColor = Color.FromArgb(30, 30, 32);
         right.Controls.Add(_preview);
 
         var caption = new Label
         {
             Dock = DockStyle.Bottom,
-            Height = 30,
+            Height = 24,
             TextAlign = ContentAlignment.MiddleCenter,
-            ForeColor = SystemColors.GrayText,
-            Text = "Exactly what will be drawn over the game. The dotted lines are a third and " +
-                   "two thirds of the height: in front at the top, behind at the bottom.",
+            ForeColor = Color.LightGray,
+            Font = new Font("Segoe UI", 8f),
+            Text = "Live preview (exactly what you'll see in-game).",
+            BackColor = Color.FromArgb(30, 30, 32),
         };
         right.Controls.Add(caption);
         root.Controls.Add(right, 1, 0);
@@ -186,53 +245,83 @@ internal sealed class LookTab
         return root;
     }
 
-    /// <summary>Re-renders the preview. Cheap, so it runs on every change.</summary>
     public void Refresh()
     {
         foreach (var r in _refreshers) r();
         _preview.SetEvents(DemoCues.Live());
     }
 
-    // --- little layout helpers ---------------------------------------------------
+    // --- layout helpers ----------------------------------------------------------
 
     private static int Group(Control into, int y, string title)
     {
         into.Controls.Add(new Label
         {
-            Bounds = new Rectangle(0, y, 380, 20),
+            Bounds = new Rectangle(0, y, 340, 20),
             Text = title,
             Font = new Font("Segoe UI", 9f, FontStyle.Bold),
+            ForeColor = Color.LightGray,
+            BackColor = Color.Transparent,
         });
-        return y + 24;
+        into.Controls.Add(new Panel
+        {
+            Bounds = new Rectangle(0, y + 16, 340, 2),
+            BackColor = Color.FromArgb(100, 100, 100),
+        });
+        return y + 26;
     }
 
     private static int Control(Control into, int y, string label, Control child)
     {
-        into.Controls.Add(new Label { Bounds = new Rectangle(0, y + 4, 120, 20), Text = label });
-        child.Location = new Point(126, y);
+        into.Controls.Add(new Label { 
+            Bounds = new Rectangle(0, y + 4, 100, 18), 
+            Text = label,
+            ForeColor = Color.White,
+            BackColor = Color.Transparent,
+        });
+        child.Location = new Point(106, y);
         into.Controls.Add(child);
-        return y + 28;
+        return y + 26;
     }
 
     private int Slider(
         Control into, int y, string label, Func<double> get, Action<double> set,
-        double min, double max, double step, string unit, string help)
+        double min, double max, double step, string unit, string help, bool isAdvanced = false)
     {
-        var row = new Panel { Bounds = new Rectangle(0, y, 380, 30) };
-        row.Controls.Add(new Label
+        var row = new Panel { 
+            Bounds = new Rectangle(0, y, 360, 70),
+            Tag = isAdvanced ? "advanced" : null,
+        };
+        
+        var labelTop = new Label
         {
-            Bounds = new Rectangle(0, 5, 130, 18),
+            Bounds = new Rectangle(0, 0, 100, 20),
             Text = label,
-        });
+            Font = new Font("Segoe UI", 9f),
+            ForeColor = Color.White,
+            BackColor = Color.Transparent,
+        };
+        row.Controls.Add(labelTop);
+
+        var value = new Label
+        {
+            Bounds = new Rectangle(100, 0, 60, 20),
+            TextAlign = ContentAlignment.MiddleRight,
+            Font = new Font("Consolas", 9f),
+            ForeColor = Color.LightGreen,
+            BackColor = Color.Transparent,
+        };
+        row.Controls.Add(value);
 
         var bar = new TrackBar
         {
-            Bounds = new Rectangle(134, 3, 340, 24),
+            Bounds = new Rectangle(0, 24, 360, 24),
             Minimum = (int)Math.Round(min / step),
             Maximum = (int)Math.Round(max / step),
             TickStyle = TickStyle.None,
             SmallChange = 1,
             LargeChange = (int)Math.Round(1.0 / step),
+            BackColor = Color.FromArgb(60, 60, 60),
         };
 
         bar.MouseUp += (_, _) =>
@@ -247,19 +336,21 @@ internal sealed class LookTab
         };
         row.Controls.Add(bar);
 
-        var value = new Label
+        var helpLabel = new Label
         {
-            Bounds = new Rectangle(480, 5, 96, 18),
-            TextAlign = ContentAlignment.MiddleRight,
-            Font = new Font("Consolas", 9f),
+            Bounds = new Rectangle(0, 52, 360, 18),
+            Text = help,
+            Font = new Font("Segoe UI", 7.5f),
+            ForeColor = Color.LightGray,
+            BackColor = Color.Transparent,
+            AutoEllipsis = true,
         };
-        row.Controls.Add(value);
+        row.Controls.Add(helpLabel);
 
-        // Reload shows initial value
         var tip = new ToolTip();
-        tip.SetToolTip(row, help);
+        tip.SetToolTip(bar, help);
 
-        into.Controls.Add(row);
+        _leftPanel.Controls.Add(row);
         _refreshers.Add(() =>
         {
             var v = get();
@@ -268,17 +359,22 @@ internal sealed class LookTab
                 : v.ToString("0.###");
         });
 
-        return y + 32;
+        return y + 74;
     }
 
     private int ColourRow(
         Control into, int y, string label, Func<Rgba> get, Action<Rgba> set, string help)
     {
-        into.Controls.Add(new Label { Bounds = new Rectangle(0, y + 4, 120, 20), Text = label });
+        into.Controls.Add(new Label { 
+            Bounds = new Rectangle(0, y + 4, 100, 18), 
+            Text = label,
+            ForeColor = Color.White,
+            BackColor = Color.Transparent,
+        });
 
         var box = new Panel
         {
-            Bounds = new Rectangle(126, y, 44, 22),
+            Bounds = new Rectangle(106, y, 36, 20),
             BackColor = ToColor(get()),
             BorderStyle = BorderStyle.FixedSingle,
         };
@@ -292,8 +388,6 @@ internal sealed class LookTab
             {
                 Color = ToColor(get()),
                 FullOpen = true,
-                // Any colour at all, including fully transparent - a user may want a cue
-                // visible in the preview and invisible in the game, or vice versa.
                 CustomColors = { },
             };
 
@@ -308,6 +402,18 @@ internal sealed class LookTab
         return y + 28;
     }
 
+    private void UpdateCasualMode()
+    {
+        foreach (Control ctrl in _leftPanel.Controls)
+        {
+            if (ctrl.Tag as string == "advanced")
+            {
+                ctrl.Visible = !_config.CasualMode;
+            }
+        }
+        _leftPanel.PerformLayout();
+    }
+
     internal static Color ToColor(Rgba c) => Color.FromArgb(c.A, c.R, c.G, c.B);
 
     internal static Rgba FromColor(Color c) => new(c.R, c.G, c.B, c.A);
@@ -316,12 +422,6 @@ internal sealed class LookTab
 /// <summary>
 /// The demonstration cues the live preview shows.
 /// </summary>
-/// <remarks>
-/// A fixed spread of imbalances, so the preview always demonstrates the range rather
-/// than whatever happened to be loudest. One is below the threshold on purpose, because
-/// the user needs to see that a faint sound produces nothing at the current setting -
-/// that is the single most surprising property of the display.
-/// </remarks>
 internal static class DemoCues
 {
     public static IReadOnlyList<AudioEvent> Live() => new[]

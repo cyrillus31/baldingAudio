@@ -133,7 +133,7 @@ public sealed class OverlayStyle
     /// Raising this pulls every line's outer end in from the edge, and nothing else
     /// changes.
     /// </summary>
-    public double SideInsetFraction { get; set; } = 0.01;
+    public double SideInsetFraction { get; set; } = 0.0;
 
     /// <summary>
     /// How much of the available height the scales span, 0..1. 1 puts straight ahead at

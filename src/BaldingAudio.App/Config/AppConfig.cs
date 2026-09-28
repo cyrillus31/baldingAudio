@@ -54,6 +54,9 @@ public sealed class AppConfig
     /// <summary>Play a test cue on startup so the user can confirm it works.</summary>
     public bool SelfTestOnStart { get; set; } = true;
 
+    /// <summary>Casual mode hides advanced sliders and uses recommended defaults.</summary>
+    public bool CasualMode { get; set; } = true;
+
     public static string DefaultPath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "baldingAudio",

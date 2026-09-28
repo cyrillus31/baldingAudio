@@ -14,7 +14,6 @@ internal sealed class SettingsForm : Form
     private readonly BalanceMeter _meter;
     private readonly Label _numbers;
     private readonly Label _verdict;
-
     private readonly System.Windows.Forms.Timer _poll;
 
     public SettingsForm(AppHost host, AppConfig config)
@@ -30,10 +29,11 @@ internal sealed class SettingsForm : Form
         MaximizeBox = false;
         AutoScaleMode = AutoScaleMode.None;
         Font = new Font("Segoe UI", 9f);
-
+        BackColor = Color.FromArgb(45, 45, 48);
         AutoScroll = true;
 
         _preview = new PreviewPanel(_config.Style, _config.FilterOrDefault);
+        _preview.BackColor = Color.FromArgb(25, 25, 27);
 
         var y = 12;
 
@@ -47,6 +47,7 @@ internal sealed class SettingsForm : Form
             TextAlign = ContentAlignment.MiddleCenter,
             Font = new Font("Segoe UI", 10f, FontStyle.Bold),
             Text = "listening",
+            ForeColor = Color.LightGray,
         };
         Controls.Add(_verdict);
         y += 26;
@@ -56,6 +57,7 @@ internal sealed class SettingsForm : Form
             Bounds = new Rectangle(12, y, 576, 92),
             Font = new Font("Consolas", 9f),
             Text = "starting...",
+            ForeColor = Color.LightGray,
         };
         Controls.Add(_numbers);
         y += 98;
@@ -68,17 +70,34 @@ internal sealed class SettingsForm : Form
         {
             Bounds = new Rectangle(12, y + 530, 576, 40),
             FlowDirection = FlowDirection.RightToLeft,
+            BackColor = Color.FromArgb(45, 45, 48),
         };
 
-        var close = new Button { Text = "Close", DialogResult = DialogResult.None, AutoSize = true };
+        var close = new Button { 
+            Text = "Close", 
+            DialogResult = DialogResult.None, 
+            AutoSize = true,
+            BackColor = Color.FromArgb(60, 60, 60),
+            ForeColor = Color.White,
+        };
         close.Click += (_, _) => Close();
         buttons.Controls.Add(close);
 
-        var defaults = new Button { Text = "Defaults", AutoSize = true };
+        var defaults = new Button { 
+            Text = "Reset all", 
+            AutoSize = true,
+            BackColor = Color.FromArgb(60, 60, 60),
+            ForeColor = Color.White,
+        };
         defaults.Click += (_, _) => RestoreDefaults();
         buttons.Controls.Add(defaults);
 
-        var save = new Button { Text = "Save now", AutoSize = true };
+        var save = new Button { 
+            Text = "Save", 
+            AutoSize = true,
+            BackColor = Color.FromArgb(60, 60, 60),
+            ForeColor = Color.White,
+        };
         save.Click += (_, _) => Save();
         buttons.Controls.Add(save);
 
@@ -100,7 +119,7 @@ internal sealed class SettingsForm : Form
         var tuningObj = _config.Tuning;
 
         // Tab 1: Tuning
-        var tuning = new Panel { Dock = DockStyle.Fill, AutoScroll = true };
+        var tuning = new Panel { Dock = DockStyle.Fill, AutoScroll = true, BackColor = Color.FromArgb(45, 45, 48) };
         var y = 12;
 
         AddGroup(tuning, ref y, "Side threshold");
@@ -108,73 +127,87 @@ internal sealed class SettingsForm : Form
             () => style.BalanceFloorDb,
             v => style.BalanceFloorDb = v,
             0.5, 12.0, 0.1, "dB",
-            "How much louder one ear has to be before a line is drawn.");
+            "0.5 dB = very sensitive (draws even tiny imbalances)\n" +
+            "12 dB = only very loud imbalances show");
 
-        AddGroup(tuning, ref y, "How loud before it shows");
-        AddRow(tuning, ref y, "Faintest shown",
+        AddGroup(tuning, ref y, "Volume range");
+        AddRow(tuning, ref y, "Faintest",
             () => tuningObj.DisplayFloorDb,
             v => tuningObj.DisplayFloorDb = v,
             -90, -30, 1, "dBFS",
-            "Below this level nothing is drawn at all.");
-        AddRow(tuning, ref y, "Loudest shown",
+            "-90 dBFS = show everything (even silence noise)\n" +
+            "-30 dBFS = only loud sounds show");
+
+        AddRow(tuning, ref y, "Loud max",
             () => tuningObj.DisplayCeilingDb,
             v => tuningObj.DisplayCeilingDb = v,
             -40, 0, 1, "dBFS",
-            "The level that maps to full brightness.");
+            "What loudness is shown as full brightness");
+
         AddRow(tuning, ref y, "Contrast",
             () => tuningObj.LevelExponent,
             v => tuningObj.LevelExponent = v,
             0.5, 3.0, 0.05, "",
-            "How quickly brightness rises with level.");
+            "0.5 = very gradual brightness increase\n" +
+            "3.0 = very sudden brightness increase (logarithmic)");
 
-        AddGroup(tuning, ref y, "Line");
-        AddRow(tuning, ref y, "Longest",
+        AddGroup(tuning, ref y, "Line layout");
+        AddRow(tuning, ref y, "Longest line",
             () => style.MaxLengthFraction,
             v => style.MaxLengthFraction = v,
             0.02, 0.20, 0.005, "of width",
-            "Length is the imbalance, so this is where a sound right at the edge of the side you reach.");
-        AddRow(tuning, ref y, "Shortest",
+            "0.02 = very short line\n" +
+            "0.20 = very long line");
+
+        AddRow(tuning, ref y, "Shortest line",
             () => style.MinLengthFraction,
             v => style.MinLengthFraction = v,
             0.0, 0.03, 0.001, "of width",
-            "A floor so a faint line is still visible.");
-        AddRow(tuning, ref y, "Thickness",
+            "0.0 = short lines can disappear\n" +
+            "0.03 = even faint cues show at least this length");
+
+        AddRow(tuning, ref y, "Line thickness",
             () => style.LineThicknessFraction,
             v => style.LineThicknessFraction = v,
             0.002, 0.020, 0.001, "of height",
-            "Kept constant so a line reads as a line rather than a dot.");
+            "Thicker lines are easier to see, but take more screen space");
 
         AddGroup(tuning, ref y, "Position");
-        AddRow(tuning, ref y, "Inset top/bottom",
+        AddRow(tuning, ref y, "Top/bottom",
             () => style.FieldInsetFraction,
             v => style.FieldInsetFraction = v,
-            0.0, 0.20, 0.005, "of height",
-            "Keeps straight-ahead and directly-behind clear of the screen edges.");
-        AddRow(tuning, ref y, "Inset from side",
+            0.0, 0.25, 0.005, "of height",
+            "0.0 = front/behind on screen edges\n" +
+            "0.25 = pulled far from edges");
+
+        AddRow(tuning, ref y, "Side inset",
             () => style.SideInsetFraction,
             v => style.SideInsetFraction = v,
-            0.0, 0.06, 0.001, "of height",
-            "Pulls the outer end in from the edge, clear of a game's minimap.");
+            0.0, 0.08, 0.001, "of short side",
+            "0.0 = cues on screen edges\n" +
+            "0.08 = pulled in to avoid game UI");
+
         AddRow(tuning, ref y, "Band height",
             () => style.FieldRadiusYFraction,
             v => style.FieldRadiusYFraction = v,
             0.4, 1.0, 0.01, "",
-            "How much of the height the scales span.");
+            "0.4 = narrow vertical range\n" +
+            "1.0 = full screen height for front/behind");
 
         tuning.Height = y + 20;
-        _tabs.TabPages.Add(new TabPage("Tuning") { Controls = { tuning } });
+        _tabs.TabPages.Add(new TabPage("Tuning") { BackColor = Color.FromArgb(45, 45, 48), Controls = { tuning } });
 
         // Tab 2: Look
         var look = new LookTab(_config, _host, _preview);
-        _tabs.TabPages.Add(new TabPage("Look") { Controls = { look.Build() } });
+        _tabs.TabPages.Add(new TabPage("Look") { BackColor = Color.FromArgb(45, 45, 48), Controls = { look.Build() } });
 
         // Tab 3: Sounds
         var sounds = new SoundsTab(_config, _host, _preview);
-        _tabs.TabPages.Add(new TabPage("Sounds") { Controls = { sounds.Build() } });
+        _tabs.TabPages.Add(new TabPage("Sounds") { BackColor = Color.FromArgb(45, 45, 48), Controls = { sounds.Build() } });
 
         // Tab 4: Help
         var help = BuildHelpTab();
-        _tabs.TabPages.Add(new TabPage("Help") { Controls = { help } });
+        _tabs.TabPages.Add(new TabPage("Help") { BackColor = Color.FromArgb(45, 45, 48), Controls = { help } });
 
         _tabs.SelectedIndexChanged += (_, _) =>
         {
@@ -184,47 +217,50 @@ internal sealed class SettingsForm : Form
 
     private Panel BuildHelpTab()
     {
-        var panel = new Panel { Dock = DockStyle.Fill, AutoScroll = true };
+        var panel = new Panel { Dock = DockStyle.Fill, AutoScroll = true, BackColor = Color.FromArgb(45, 45, 48) };
         var y = 12;
 
         AddGroup(panel, ref y, "What you are seeing");
 
         panel.Controls.Add(new Label
         {
+            Bounds = new Rectangle(0, y, 550, 90),
+            Text = "Lines run inward from the side edges:\n" +
+                   "• Left/right side → which ear is louder\n" +
+                   "• Length → how much louder (imbalance)\n" +
+                   "• Height → front (top) vs behind (bottom)",
+            ForeColor = Color.LightGray,
+            AutoSize = false,
+        });
+        y += 100;
+
+        AddGroup(panel, ref y, "Neon blocks");
+
+        panel.Controls.Add(new Label
+        {
             Bounds = new Rectangle(0, y, 550, 120),
-            Text = "Horizontal lines run inward from the left and right edges. " +
-                   "The side the line starts from (left or right) tells you which ear is louder. " +
-                   "The length of the line tells you how much louder (the imbalance). " +
-                   "The vertical position tells you where the sound is: " +
-                   "near the top is straight ahead, near the bottom is directly behind.",
+            Text = "Neon blocks (stereo only):\n" +
+                   "• Left block = left ear louder\n" +
+                   "• Right block = right ear louder\n" +
+                   "• Brightest at screen edge, fades toward center\n" +
+                   "• Vertical size = how much louder one ear is\n" +
+                   "• Multichannel automatically falls back to lines",
+            ForeColor = Color.LightGray,
             AutoSize = false,
         });
         y += 130;
 
-        AddGroup(panel, ref y, "Neon side mode (alternative)");
-
-        panel.Controls.Add(new Label
-        {
-            Bounds = new Rectangle(0, y, 550, 140),
-            Text = "In this mode, the display uses neon blocks on the edges instead of lines. " +
-                   "A block on the left or right edge, centred on the horizontal middle, " +
-                   "growing symmetrically up and down with the difference between your ears. " +
-                   "The vertical size shows how big the difference between your ears is. " +
-                   "This mode is for two-channel (stereo) endpoints only; multichannel falls " +
-                   "back to lines.",
-            AutoSize = false,
-        });
-        y += 150;
-
         AddGroup(panel, ref y, "Live preview");
+
         panel.Controls.Add(new Label
         {
-            Bounds = new Rectangle(0, y, 550, 50),
-            Text = "The Look and Sounds tabs show a live preview of what will be drawn. " +
-                   "Everything you change updates instantly, so you can see the effect before closing the window.",
+            Bounds = new Rectangle(0, y, 550, 40),
+            Text = "The Look and Sounds tabs show exactly what you'll see in-game. " +
+                   "Changes update instantly as you drag sliders.",
+            ForeColor = Color.LightGray,
             AutoSize = false,
         });
-        y += 60;
+        y += 50;
 
         panel.Height = y + 20;
         return panel;
@@ -237,8 +273,15 @@ internal sealed class SettingsForm : Form
             Bounds = new Rectangle(0, y, 550, 18),
             Text = title,
             Font = new Font("Segoe UI", 9f, FontStyle.Bold),
+            ForeColor = Color.LightGray,
+            BackColor = Color.Transparent,
         });
-        y += 20;
+        into.Controls.Add(new Panel
+        {
+            Bounds = new Rectangle(0, y + 14, 550, 2),
+            BackColor = Color.FromArgb(100, 100, 100),
+        });
+        y += 22;
     }
 
     private void AddRow(
@@ -252,21 +295,37 @@ internal sealed class SettingsForm : Form
         string unit,
         string help)
     {
-        var row = new Panel { Bounds = new Rectangle(0, y, 550, 30) };
-        row.Controls.Add(new Label
+        var row = new Panel { Bounds = new Rectangle(0, y, 550, 70), BackColor = Color.Transparent };
+        
+        var labelTop = new Label
         {
-            Bounds = new Rectangle(0, 5, 130, 18),
+            Bounds = new Rectangle(0, 0, 140, 20),
             Text = label,
-        });
+            Font = new Font("Segoe UI", 9f),
+            ForeColor = Color.White,
+            BackColor = Color.Transparent,
+        };
+        row.Controls.Add(labelTop);
+
+        var value = new Label
+        {
+            Bounds = new Rectangle(140, 0, 60, 20),
+            TextAlign = ContentAlignment.MiddleRight,
+            Font = new Font("Consolas", 9f),
+            ForeColor = Color.LightGreen,
+            BackColor = Color.Transparent,
+        };
+        row.Controls.Add(value);
 
         var bar = new TrackBar
         {
-            Bounds = new Rectangle(134, 3, 340, 24),
+            Bounds = new Rectangle(0, 24, 550, 24),
             Minimum = (int)Math.Round(min / step),
             Maximum = (int)Math.Round(max / step),
             TickStyle = TickStyle.None,
             SmallChange = 1,
             LargeChange = (int)Math.Round(1.0 / step),
+            BackColor = Color.FromArgb(60, 60, 60),
         };
 
         bar.MouseUp += (_, _) =>
@@ -281,28 +340,19 @@ internal sealed class SettingsForm : Form
         };
         row.Controls.Add(bar);
 
-        var value = new Label
+        var helpLabel = new Label
         {
-            Bounds = new Rectangle(480, 5, 96, 18),
-            TextAlign = ContentAlignment.MiddleRight,
-            Font = new Font("Consolas", 9f),
+            Bounds = new Rectangle(0, 52, 550, 18),
+            Text = help,
+            Font = new Font("Segoe UI", 8f),
+            ForeColor = Color.LightGray,
+            BackColor = Color.Transparent,
+            AutoEllipsis = true,
         };
-        row.Controls.Add(value);
+        row.Controls.Add(helpLabel);
 
-        var tip = new ToolTip();
-        tip.SetToolTip(row, help);
-
-        var show = new Action(() =>
-        {
-            var v = get();
-            value.Text = unit.Length > 0
-                ? $"{v:0.###} {unit}"
-                : v.ToString("0.###");
-        });
-        show();
-        row.Tag = show;
         into.Controls.Add(row);
-        y += 32;
+        y += 76;
     }
 
     private void RestoreDefaults()
@@ -351,17 +401,17 @@ internal sealed class SettingsForm : Form
         _verdict.Text = !r.HasAudio
             ? $"no audio - {r.CaptureState}"
             : r.Paused
-                ? "PAUSED - the display is held, capture is still running"
+                ? "PAUSED - the display is held, capture still running"
                 : r.IsMultichannel
-                    ? $"{r.Layout} - multichannel, so length shows loudness not side"
+                    ? $"{r.Layout} - multichannel: length shows loudness"
                     : r.PeakHoldBalance is null
                         ? $"{r.Layout} - silent"
                         : r.PeakWouldDraw
-                            ? $"DRAWS  {r.PeakHoldDb,5:F1} dB to the {r.Side}  (threshold {_config.Style.BalanceFloorDb:F1} dB)"
-                            : $"HIDDEN {r.PeakHoldDb,5:F1} dB to the {r.Side}, under the {_config.Style.BalanceFloorDb:F1} dB threshold";
+                            ? $"DRAWS  {r.PeakHoldDb,5:F1} dB to the {r.Side}  (thresh {_config.Style.BalanceFloorDb:F1} dB)"
+                            : $"HIDDEN {r.PeakHoldDb,5:F1} dB to the {r.Side}, under {_config.Style.BalanceFloorDb:F1} dB";
 
         _verdict.ForeColor = !r.HasAudio || r.PeakHoldBalance is null
-            ? SystemColors.GrayText
+            ? Color.Gray
             : r.PeakWouldDraw ? Color.FromArgb(0, 130, 0) : Color.FromArgb(170, 40, 0);
 
         _numbers.Text =
@@ -396,7 +446,7 @@ internal sealed class BalanceMeter : Control
     protected override void OnPaint(PaintEventArgs e)
     {
         var g = e.Graphics;
-        g.Clear(BackColor);
+        g.Clear(Color.FromArgb(30, 30, 32));
 
         if (!_readout.HasAudio)
         {
