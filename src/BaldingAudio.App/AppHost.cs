@@ -235,10 +235,19 @@ public sealed class AppHost : IDisposable
             ? $"{spectrum!.AzimuthOf(loudestBin),5:F0}° level {loudest,5:F3}"
             : "silent          ";
 
+        // Say whether the loudest bearing had a side at all. A cue near dead-ahead has
+        // none - the bearing is a couple of degrees of noise and its sign is not a
+        // measurement - and it is drawn from both edges. Without this the log shows a
+        // confident-looking "loudest -8 deg" for a cue that is deliberately on both
+        // sides, which is exactly the reading that sent the diagnosis of the music
+        // report down the wrong path twice.
+        var side = !spectrum?.Ambiguous ?? true;
+        var sided = loudest <= 0.0005 ? "" : side ? "side known" : "BOTH SIDES";
+
         Log.Info(
             $"{mode} | {captureState} | peak {_lastDbfs,6:F0} dBFS | floor {_lastNoiseFloorDb,6:F0} dBFS | " +
             $"events {Interlocked.Read(ref _eventsSeen)} | lines {_tracker.Visible.Count} | " +
-            $"loudest {where} | {_framesDrawn} frames");
+            $"loudest {where} | {sided,-10} | {_framesDrawn} frames");
 
         WarnIfCaptureUnhealthy();
     }

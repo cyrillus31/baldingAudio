@@ -143,7 +143,7 @@ interop checks are in `src/BaldingAudio.App/Audio/InteropSelfCheck.cs`, because 
 Win32 declarations live in App and Core must stay free of them. The capture-handoff
 checks are in `src/BaldingAudio.App/AppSelfCheck.cs`, covering the seam between the
 capture thread and the UI thread, which is where a fault is reported as a broken
-analyser. 26 checks total, and all of them run headless on Linux. The interop group
+analyser. 31 checks total, and all of them run headless on Linux. The interop group
 needs no audio device, so a wrong constant is caught in a second rather than on the
 user's machine.
 
