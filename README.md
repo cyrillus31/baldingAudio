@@ -81,8 +81,12 @@ So on stereo:
   in your face is invisible, by design.
 - A sound to your right draws only on the right, and how long the bar is grows with how
   lopsided it is.
-- Anything below ~0.9 dB between the ears is treated as centred and ignored, because
-  that is below what a person can reliably localise.
+- Anything below **3 dB between the ears** is treated as centred and ignored, because
+  that is roughly where a level difference becomes reliably localisable, and anything
+  under about 1 dB is below the noise of a quiet room. Measured on the running app, a
+  1 dB and a 2 dB pan both draw nothing, 3 dB and up draw once, always on the correct
+  side. The threshold is one number in `config.json` — `balanceFloorDb` — and it is
+  measured in decibels because "0.33" is not something anyone can judge by ear.
 
 Loudness did not disappear — it moved to **brightness**, so length and brightness answer
 two different questions and neither is wasted.

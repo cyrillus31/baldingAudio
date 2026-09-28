@@ -1,4 +1,5 @@
 using BaldingAudio.Core.Audio;
+using BaldingAudio.Core.Dsp;
 
 namespace BaldingAudio.Core.Overlay;
 
@@ -9,11 +10,11 @@ namespace BaldingAudio.Core.Overlay;
 /// Two side scales. Lines run inward from the left and right edges, and height on
 /// screen means front/behind:
 ///
-///   sign of azimuth  ->  which edge. Negative starts at the left edge and runs right,
-///                        positive starts at the right edge and runs left. Exactly zero
-///                        goes right, having no side of its own.
 ///   |azimuth|        ->  height. 0 (straight ahead) is the top of the band, 90 (to the
 ///                        side) is the middle, 180 (behind) is the bottom.
+///
+/// On a two-channel endpoint the edge comes from the left/right imbalance instead, and
+/// its length is that same imbalance. See <see cref="OverlayStyle.BalanceFloorDb"/>.
 ///
 /// So a sound in front and to the left starts at the left edge, near the top; one
 /// behind and to the left starts at the left edge, near the bottom. Both halves of the
@@ -56,9 +57,18 @@ public sealed class OverlayStyle
     /// side that isn't there.
     ///
     /// <para>
-    /// 0.1 is roughly 0.9 dB between the ears, which is below what most listeners can
-    /// localise even deliberately, let alone mid-firefight. Raise it to cut clutter
-    /// further at the cost of missing sounds that are only slightly off to one side.
+    /// Read and set this through <see cref="BalanceFloorDb"/>. The raw number is an
+    /// energy ratio, so 0.1 is not "a tenth off to one side", it is 0.87 dB between the
+    /// ears - below the noise of most rooms, which is why it drew things in a silent
+    /// space. The default is 3 dB, which is where a level difference starts to be
+    /// reliably localisable and is a third of what it was.
+    /// </para>
+    ///
+    /// <para>
+    /// Measured on the running app by panning a test signal across the endpoint:
+    /// 1 dB reads 0.11, 2 dB 0.23, 3 dB 0.33, 4 dB 0.43, 6 dB 0.60, 9 dB 0.78. Those
+    /// agree with the closed form (g-1)/(g+1) for g = 10^(dB/10) to three decimals, which
+    /// is the check that the analyser compares energy and the conversion does too.
     /// </para>
     ///
     /// <para>
@@ -66,7 +76,42 @@ public sealed class OverlayStyle
     /// inference and there is nothing to be uncertain about.
     /// </para>
     /// </summary>
-    public double BalanceFloor { get; set; } = 0.10;
+    [System.Text.Json.Serialization.JsonIgnore]
+    public double BalanceFloor { get; set; } = Decibel.BalanceFromDb(DefaultBalanceFloorDb);
+
+    /// <summary>
+    /// The same threshold in decibels, which is the unit that means something: how much
+    /// louder one ear has to be before a line is drawn. 3 dB by default.
+    ///
+    /// <para>
+    /// Offered as dB because 0.33 is not a quantity a person can judge by ear, and
+    /// because the response is steep near zero - 0.05 to 0.15 covers 0.45 dB to 1.4 dB,
+    /// so a slider over the raw balance spends most of its travel in a range where
+    /// nothing visible happens.
+    /// </para>
+    ///
+    /// <para>
+    /// This is the only form that reaches config.json. Both were serialised once, and
+    /// the loader applied them in document order, so whichever came second silently won
+    /// - a file written by the previous build held both 0.1 and 0.87 and the app ran at
+    /// 0.87 dB while every log line and every screenshot said 0.1. Two names for one
+    /// number is how a threshold ends up disagreeing with itself.
+    /// </para>
+    ///
+    /// <para>
+    /// A config written before this existed keeps its "balanceFloor" key, which is now
+    /// ignored. That key only ever held 0.1, the over-sensitive default being fixed
+    /// here, so nothing a person chose by hand is lost.
+    /// </para>
+    /// </summary>
+    public double BalanceFloorDb
+    {
+        get => Decibel.DbFromBalance(BalanceFloor);
+        set => BalanceFloor = Decibel.BalanceFromDb(value);
+    }
+
+    /// <summary>3 dB between the ears. See <see cref="BalanceFloorDb"/>.</summary>
+    public const double DefaultBalanceFloorDb = 3.0;
 
     /// <summary>
     /// Blank margin kept between the top and bottom of the screen and the ends of the

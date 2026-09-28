@@ -38,6 +38,9 @@ public sealed class AppHost : IDisposable
     private double _lastTick;
     private double _lastHeartbeat = -1;
     private long _framesDrawn;
+
+    /// <summary>Lines painted on the last frame, as opposed to tracks being tracked.</summary>
+    private int _linesDrawn;
     private long _eventsSeen;
     private double _lastNoiseFloorDb = -120;
     private double _lastDbfs = -120;
@@ -193,6 +196,14 @@ public sealed class AppHost : IDisposable
         overlay.Present();
         _framesDrawn++;
 
+        // Count what was actually painted, not what the tracker is holding. A track can
+        // exist and draw nothing - anything under the balance floor does exactly that -
+        // and the two numbers being different is the whole point of the display model.
+        // Logging the track count instead made a centred sound read as "5 lines" while
+        // the screen was empty, which is precisely the kind of plausible-looking
+        // reading that sends the next diagnosis down the wrong path.
+        _linesDrawn = _renderer.LastLineCount;
+
         if (_analyzer is not null) _lastNoiseFloorDb = _analyzer.NoiseFloorDb;
         RaiseStatus();
         LogHeartbeat(now);
@@ -249,7 +260,8 @@ public sealed class AppHost : IDisposable
 
         Log.Info(
             $"{mode} | {captureState} | peak {_lastDbfs,6:F0} dBFS | floor {_lastNoiseFloorDb,6:F0} dBFS | " +
-            $"events {Interlocked.Read(ref _eventsSeen)} | lines {_tracker.Visible.Count} | " +
+            $"events {Interlocked.Read(ref _eventsSeen)} | " +
+            $"lines {_linesDrawn} drawn / {_tracker.Visible.Count} tracked | " +
             $"loudest {where} | bal {balance,-14} | {_framesDrawn} frames");
 
         WarnIfCaptureUnhealthy();

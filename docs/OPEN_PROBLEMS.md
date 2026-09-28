@@ -287,8 +287,8 @@ co = cs + cb * (1 - as)
   problem 2's real cause was misread as a DSP problem. The self-test now has a third
   group for it (`AppSelfCheck`) alongside the DSP checks and the Win32 checks, so this
   class of fault is covered rather than inferred from a log line.
-- **The `--selftest` suite is 31 checks** and runs headless on Linux: 18 DSP and display,
-  6 Win32 interop, 7 capture handoff, all in seconds. Extend it rather than leaving a fix
+- **The `--selftest` suite is 35 checks** and runs headless on Linux: 20 DSP and display,
+  6 Win32 interop, 8 capture handoff and config, all in seconds. Extend it rather than leaving a fix
   unverified — three of the four bugs above were only findable by adding to it.
 - **A field diagnosis is a hypothesis, not a finding.** Four of the diagnoses in this
   document were wrong on the first pass: the ITD correlation window, the display floor,
@@ -302,3 +302,81 @@ co = cs + cb * (1 - as)
   `Snapshot` rebuilds the spectrum from bins alone. The headless checks publish and read
   the same object, so they passed while the real overlay silently kept the old behaviour.
   The check now lives in `AppSelfCheck`, next to the exchange it protects.
+
+---
+
+## Third field round, 2026-09-28 — the sensitivity was set in the wrong unit
+
+> "in a quire room we are still showing too much. we need to decrease sensibility and maybe
+> provide even sliders for this setup... nevertheless i am thinking that sensibility should be
+> toned down and the lowest visible different should be moved higher."
+
+### 6. The side threshold was 0.87 dB, not 0.10 — FIXED
+
+`BalanceFloor` was a raw balance, defaulted to `0.10`, and documented as "roughly 0.9 dB
+between the ears". The number was right and the *scale* was wrong. The balance is an
+**energy** ratio, because the analyser compares mean squares, so
+
+    balance = (g - 1) / (g + 1)   for   g = 10^(dB/10)
+
+and 0.10 is 0.87 dB. That is below the noise of a quiet room, which is precisely the
+reported symptom. The amplitude form, which is what the default was written against, puts
+3 dB at 0.17 rather than 0.33 — a factor of two in the sensitivity of the one number the
+user tunes.
+
+Now expressed as `BalanceFloorDb`, defaulting to **3 dB**, and calibrated against the
+running app rather than against algebra:
+
+| pan across the endpoint | reported balance |
+| --- | --- |
+| 1 dB | 0.11 |
+| 2 dB | 0.23 |
+| 3 dB | 0.33 |
+| 4 dB | 0.43 |
+| 6 dB | 0.60 |
+| 9 dB | 0.78 |
+
+Verified on the user's machine with panned test signals and the 3 dB floor in place: 1 dB
+and 2 dB draw nothing, 3 dB and above draw exactly one line, always on the correct edge,
+with no wrong-side reading in 40 samples.
+
+The unit change alone is not the interesting part. The interesting part is what it exposed:
+
+### 7. One setting had two names, and the file disagreed with the app — FIXED
+
+`BalanceFloorDb` was added as a second property over the same value, and
+`System.Text.Json` serialises both and applies them **in document order**. The config on
+the user's machine held both:
+
+```json
+"balanceFloor": 0.1,
+"balanceFloorDb": 0.871501757189002
+```
+
+so the app ran at **0.87 dB** while the file, the config UI and every reading of the raw
+number said 0.1. Raising the default to 3 dB appeared to change nothing, and the reason
+was this. Two names for one number is how a threshold ends up disagreeing with itself,
+and the disagreement is invisible until someone tries to move the number.
+
+`BalanceFloor` is now `[JsonIgnore]`d; only `BalanceFloorDb` reaches disk. A legacy
+`balanceFloor` key is ignored — it only ever held 0.1, the value being replaced.
+
+### 8. The log reported tracks, not lines — FIXED
+
+The heartbeat's `lines` column was `_tracker.Visible.Count`, the number of events being
+tracked. A track under the threshold is tracked and deliberately not drawn, so a centred
+sound logged `lines 5` while the screen was empty. During the field round this was read as
+evidence of clutter that did not exist. Now `5 drawn / 5 tracked`, and
+`OverlayRenderer.LastLineCount` reports what was actually painted.
+
+### Still open
+
+**A settings UI.** The user asked for sliders, live tweaking, and a test facility that
+plays gunshot-like sounds left and right over military background noise. Not built yet.
+The threshold is currently only reachable by editing `config.json`, which is a worse way
+to find a value you have to hear.
+
+**`DisplayFloorDb` is still at −72 dBFS.** Measured earlier to admit 97.8% of field
+heartbeats, so the level gate filters essentially nothing. Deliberately unchanged: raising
+it trades directly against the original "quiet distant sounds don't show" complaint, and
+the balance gate is the principled filter. Decide from a real game, not from the log.

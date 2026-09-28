@@ -39,6 +39,7 @@ public static partial class SelfTest
             TestLineFallsWhenSoundStops(),
             TestFrozenOverlayKeepsItsLines(),
             TestSpectrumCanStartALine(),
+            TestSideThresholdIsInDecibels(),
             TestCentredStereoSourceHasNoSide(),
             TestBarLengthAndEdgeComeFromTheImbalance(),
             TestMeasuredImbalanceHasTheRightSign(),

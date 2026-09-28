@@ -36,6 +36,25 @@ public static class Decibel
 
     /// <summary>Inverse of the default visibility window, for synthesising test cues.</summary>
     public static double FromUnitLevel(double level) => -72.0 + Math.Clamp(level, 0.0, 1.0) * 56.0;
+
+    /// <summary>
+    /// Converts an interaural level difference to the signed energy balance the overlay
+    /// draws from: +1 for everything in the right channel, -1 for the left, 0 for an
+    /// even split.
+    ///
+    /// <para>
+    /// Energy, not amplitude, because that is what the analyser measures - it compares
+    /// mean squares. So a 3 dB level difference is a factor of two in energy and lands
+    /// at 0.33, not 0.17. Getting this wrong in either direction puts the
+    /// <see cref="Overlay.OverlayStyle.BalanceFloorDb"/> default at the wrong
+    /// sensitivity by a factor of two, and it is the kind of factor that is invisible
+    /// until a quiet room fills with lines.
+    /// </para>
+    /// </summary>
+    public static double BalanceFromDb(double db) => Math.Tanh(db / 10.0 * 0.5 * Math.Log(10.0));
+
+    /// <summary>Inverse of <see cref="BalanceFromDb"/>.</summary>
+    public static double DbFromBalance(double balance) => 10.0 * Math.Log10((1.0 + balance) / (1.0 - balance));
 }
 
 /// <summary>

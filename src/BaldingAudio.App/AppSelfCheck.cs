@@ -1,4 +1,5 @@
 using System.Reflection;
+using BaldingAudio.App.Config;
 using BaldingAudio.App.Audio;
 using BaldingAudio.Core.Audio;
 
@@ -37,6 +38,7 @@ internal static class AppSelfCheck
             CheckSilenceCanNeverCauseAReopen(),
             CheckFailureClassificationDecidesTheLoop(),
             CheckBackoffClearsAfterAStreamProvesItself(),
+            CheckSideThresholdSurvivesTheConfigFile(),
         };
 
         foreach (var r in results)
@@ -469,6 +471,79 @@ internal static class AppSelfCheck
     }
 
     private const string Name6 = "the recovery backoff clears once a stream proves itself";
+
+    private const string Name7 = "the side threshold is stored once, in decibels, and reads back the same";
+
+    /// <summary>
+    /// The threshold reached config.json under two names at once - the raw balance and
+    /// the decibel form - and System.Text.Json applied them in document order, so the
+    /// second silently overwrote the first.
+    ///
+    /// <para>
+    /// The field damage: a config written by that build held <c>balanceFloor: 0.1</c> and
+    /// <c>balanceFloorDb: 0.87</c>, and the app ran at 0.87 dB while the raw number
+    /// everyone read - in the file, in the log, in a screenshot of the settings - said
+    /// 0.1. Raising the default to 3 dB appeared to do nothing, and the only reason was
+    /// that the file said 0.87.
+    /// </para>
+    ///
+    /// <para>
+    /// Checked by writing a real config, reading it back, and confirming the threshold
+    /// survives and is stored once. A legacy file holding only the old key must not
+    /// resurrect the over-sensitive value either, because the whole point of raising the
+    /// default is to stop that value being used.
+    /// </para>
+    /// </summary>
+    private static Check CheckSideThresholdSurvivesTheConfigFile()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "baldingAudio-selftest-" + Guid.NewGuid().ToString("N"));
+        var path = Path.Combine(dir, "config.json");
+        try
+        {
+            Directory.CreateDirectory(dir);
+
+            var written = new AppConfig();
+            written.Style.BalanceFloorDb = 4.5;
+            written.Save(path);
+
+            var text = File.ReadAllText(path);
+            if (text.Contains("\"balanceFloor\"", StringComparison.Ordinal))
+                return new(Name7, false,
+                    "the config still writes the raw balance as well as the decibel form, so which " +
+                    "one wins on load depends on the order they appear in the file");
+
+            if (!text.Contains("4.5", StringComparison.Ordinal))
+                return new(Name7, false,
+                    $"a threshold of 4.5 dB is not in the written config; it stored {written.Style.BalanceFloor:F4}");
+
+            var read = AppConfig.Load(path);
+            if (Math.Abs(read.Style.BalanceFloorDb - 4.5) > 1e-9)
+                return new(Name7, false,
+                    $"a threshold of 4.5 dB read back as {read.Style.BalanceFloorDb:F4} dB; a setting the " +
+                    "user changes would not survive a restart");
+
+            // A file from before the decibel form existed, holding only the old key. It
+            // must not silently reinstate 0.1 - the sensitivity this work removed.
+            File.WriteAllText(path, "{ \"version\": 1, \"style\": { \"balanceFloor\": 0.1 } }");
+            var legacy = AppConfig.Load(path);
+            if (legacy.Style.BalanceFloor < 0.3)
+                return new(Name7, false,
+                    $"a legacy config brought the threshold back to {legacy.Style.BalanceFloorDb:F2} dB, " +
+                    "reinstating the over-sensitive value the new default was meant to replace");
+
+            return new(Name7, true,
+                $"4.5 dB is stored once and reads back as {read.Style.BalanceFloorDb:F2} dB, and a legacy " +
+                $"file falls back to {legacy.Style.BalanceFloorDb:F1} dB");
+        }
+        catch (Exception ex)
+        {
+            return new(Name7, false, $"could not round-trip a config file: {ex.Message}");
+        }
+        finally
+        {
+            try { if (Directory.Exists(dir)) Directory.Delete(dir, true); } catch { }
+        }
+    }
 
     /// <summary>
     /// Total energy across all bins, which is what <c>Add</c> was given before it spread

@@ -1,4 +1,5 @@
 using BaldingAudio.Core.Audio;
+using BaldingAudio.Core.Dsp;
 using BaldingAudio.Core.Overlay;
 
 namespace BaldingAudio.Core.Diagnostics;
@@ -76,6 +77,98 @@ public static partial class SelfTest
             $"20 samples to the side ({sideAzimuth:F1} deg) is not");
     }
 
+    private const string N11 = "the side threshold is expressed in decibels and defaults to 3 dB";
+
+    /// <summary>
+    /// The threshold is the one number the user tunes, and it was wrong by a factor of
+    /// two.
+    ///
+    /// <para>
+    /// The analyser compares mean squares, so a 3 dB level difference between the ears
+    /// is a factor of two in energy and reads as 0.33 - not 0.17, which is what the
+    /// amplitude form gives. The old default of 0.10 was written as though the measure
+    /// were amplitude, and it is 0.87 dB in reality: below the noise of a quiet room,
+    /// which is exactly why the user saw lines while nothing was playing.
+    /// </para>
+    ///
+    /// <para>
+    /// This also pins the round trip, because a decibel conversion is the kind of thing
+    /// that is right in one direction and wrong in the other, and a wrong inverse makes
+    /// a slider move the wrong way.
+    /// </para>
+    /// </summary>
+    private static Result TestSideThresholdIsInDecibels()
+    {
+        var style = OverlayStyle.Default();
+
+        // Against a literal, not against the constant. The default is built *from*
+        // DefaultBalanceFloorDb, so comparing the two is comparing a value with itself -
+        // setting the constant to anything at all still passes. That was verified by
+        // trying it: 0.87 dB, the old threshold expressed in the right unit, went green.
+        const double WantDb = 3.0;
+        if (Math.Abs(style.BalanceFloorDb - WantDb) > 1e-9)
+            return new(N11, false,
+                $"the default side threshold is {style.BalanceFloorDb:F2} dB, expected {WantDb:F2} dB");
+
+        // Checked against the closed form, (g-1)/(g+1) for g = 10^(dB/10), and not
+        // against a rounded landmark like 1/3. An energy ratio of exactly 2 is
+        // 3.0103 dB, so 3 dB is 1.9953 and lands at 0.3323, not 0.3333. Asserting 1/3
+        // would have forced the conversion to be the one that produces 1/3 at 3 dB,
+        // which is the amplitude reading - the exact mistake this check exists to catch.
+        static double ClosedForm(double db)
+        {
+            var g = Math.Pow(10.0, db / 10.0);
+            return (g - 1.0) / (g + 1.0);
+        }
+
+        var threeDb = Decibel.BalanceFromDb(3.0);
+        if (Math.Abs(threeDb - ClosedForm(3.0)) > 1e-12)
+            return new(N11, false,
+                $"3 dB converted to {threeDb:F4}, expected {ClosedForm(3.0):F4}; the conversion is " +
+                "using amplitude where the analyser uses energy, or the other way round");
+
+        // The amplitude reading of 3 dB, which is what the conversion must NOT produce.
+        // Checked as a distance from 0.17 so it fails on the energy/amplitude confusion
+        // specifically, rather than incidentally on the default above.
+        if (Math.Abs(threeDb - ClosedForm(6.0)) < 0.05)
+            return new(N11, false,
+                $"3 dB converted to {threeDb:F4}, which is the amplitude answer for 3 dB; the " +
+                "analyser compares mean squares, so the energy answer is about 0.33");
+
+        foreach (var db in new[] { 0.5, 1.0, 2.0, 3.0, 6.0, 9.0, 12.0 })
+        {
+            if (Math.Abs(Decibel.BalanceFromDb(db) - ClosedForm(db)) > 1e-12)
+                return new(N11, false,
+                    $"{db:F1} dB converted to {Decibel.BalanceFromDb(db):F4}, expected " +
+                    $"{ClosedForm(db):F4} from the closed form");
+        }
+
+        foreach (var db in new[] { 0.5, 1.0, 2.0, 3.0, 6.0, 9.0, 12.0 })
+        {
+            var back = Decibel.DbFromBalance(Decibel.BalanceFromDb(db));
+            if (Math.Abs(back - db) > 1e-9)
+                return new(N11, false,
+                    $"{db:F1} dB round-tripped to {back:F4} dB, so the conversion and its inverse " +
+                    "disagree and a slider built on them would move the wrong way");
+        }
+
+        // And it must be reachable through the style, since that is the config path. Read
+        // the default into a local before mutating: printing style.BalanceFloorDb after
+        // this assignment reports the value just set as "the default", which is a log
+        // line that looks fine and is wrong - and the whole reason this file exists.
+        var defaultDb = style.BalanceFloorDb;
+
+        style.BalanceFloorDb = 9.0;
+        if (Math.Abs(Decibel.BalanceFromDb(9.0) - style.BalanceFloor) > 1e-12)
+            return new(N11, false,
+                $"setting the threshold to 9 dB stored a balance of {style.BalanceFloor:F4}, which is " +
+                "not the 9 dB value round-tripped");
+
+        return new(N11, true,
+            $"the default is {defaultDb:F1} dB, 3 dB converts to {threeDb:F3}, and the " +
+            "conversion round-trips exactly from 0.5 to 12 dB");
+    }
+
     private const string N7 = "the bar length and the edge both come from the imbalance between the ears";
 
     /// <summary>
@@ -120,8 +213,19 @@ public static partial class SelfTest
                 $"left and right bars of the same magnitude differ in length, " +
                 $"{left[0].Length:F0} and {right[0].Length:F0}");
 
-        // Length tracks the magnitude of the imbalance, not the loudness.
-        var slight = OverlayLayout.BuildLines(new[] { Cue(0.2) }, W, H, style)[0];
+        // Length tracks the magnitude of the imbalance, not the loudness. Expressed
+        // relative to the floor rather than as a fixed number, so that moving the
+        // threshold does not turn this into a check of the threshold instead - a fixed
+        // 0.2 drew a bar when the floor was 0.10 and drew nothing once it was 0.33, and
+        // the failure it produced was an out-of-range index rather than a statement
+        // about length.
+        var floor = style.BalanceFloor;
+        var slightLines = OverlayLayout.BuildLines(new[] { Cue(floor * 1.15) }, W, H, style);
+        if (slightLines.Count != 1)
+            return new(N7, false,
+                $"a cue just over the floor ({floor * 1.15:F3}) produced {slightLines.Count} line(s); " +
+                "it is off to one side and must draw");
+        var slight = slightLines[0];
         if (slight.Length >= right[0].Length)
             return new(N7, false,
                 $"a barely lopsided cue drew a bar of {slight.Length:F0} against {right[0].Length:F0} " +
@@ -134,14 +238,32 @@ public static partial class SelfTest
 
         // Centred: nothing at all, on either edge. This is the grenade-in-your-face case,
         // and the reason the old both-sides mirroring had to go.
-        foreach (var flat in new[] { 0.0, 0.02, -0.05 })
+        //
+        // The near-miss values are relative to the floor on purpose. Written as fixed
+        // small numbers they quietly became floor checks the day the floor rose from
+        // 0.10 to 0.33: "0.02 draws nothing" then passed for the wrong reason, because
+        // the threshold had excluded it rather than the mix being even. A check that
+        // cannot fail for the reason it names is worse than no check, so the values sit
+        // just under the floor on both sides, which makes the floor itself the thing
+        // being verified.
+        foreach (var flat in new[] { 0.0, floor * 0.4, -floor * 0.4, floor * 0.999 })
         {
             var lines = OverlayLayout.BuildLines(new[] { Cue(flat) }, W, H, style);
             if (lines.Count != 0)
                 return new(N7, false,
-                    $"a cue with a balance of {flat:F2} drew {lines.Count} line(s); an even or " +
-                    "near-even mix is in front of the player and must draw nothing");
+                    $"a cue with a balance of {flat:F3} drew {lines.Count} line(s) against a floor " +
+                    $"of {floor:F3}; an even or near-even mix is in front of the player and must " +
+                    "draw nothing");
         }
+
+        // And immediately over the floor it must appear, on the correct edge. Without
+        // this the block above passes for any floor at all, including one high enough to
+        // hide every real sound.
+        var justOver = OverlayLayout.BuildLines(new[] { Cue(floor * 1.001) }, W, H, style);
+        if (justOver.Count != 1 || justOver[0].Dx >= 0)
+            return new(N7, false,
+                $"a cue at balance {floor * 1.001:F3}, just over the floor of {floor:F3}, drew " +
+                $"{justOver.Count} line(s); it should draw once, from the right edge");
 
         // A cue with no balance at all is multichannel, where each speaker has a real
         // bearing, so it keeps the loudness-length model and is drawn once.
@@ -155,7 +277,8 @@ public static partial class SelfTest
 
         return new(N7, true,
             $"right draws {right[0].Length:F0}px inward from the right edge, left {left[0].Length:F0}px " +
-            $"from the left, a slight imbalance {slight.Length:F0}px, and an even mix nothing at all");
+            $"from the left, a cue just over the {floor:F3} floor {slight.Length:F0}px, and an even mix " +
+            "nothing at all");
     }
 
     private const string N9 = "a source on the right is measured as a positive imbalance, and the reverse for the left";

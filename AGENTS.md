@@ -87,8 +87,14 @@ left through +1 for all right.
   `MinLengthFraction`; that floor exists so a faint-but-drawn line is still visible, and
   here a short bar means "barely off to one side", so a floor would put a stub on both
   edges for every centred sound.
-- **Below `BalanceFloor` (0.10) nothing is drawn at all.** Roughly 0.9 dB between the
-  ears, below what most listeners can localise on purpose.
+- **Below `BalanceFloorDb` (3 dB) nothing is drawn at all.** Expressed in decibels
+  because the raw number is an energy ratio and 0.10 is not "a tenth off to one side",
+  it is 0.87 dB — below the noise of a quiet room, which is why lines appeared while
+  nothing was playing. Measured on the running app: 1 dB reads 0.11, 3 dB 0.33,
+  6 dB 0.60, 9 dB 0.78. **Only `BalanceFloorDb` is serialised**; the raw
+  `BalanceFloor` is `[JsonIgnore]`d, because both were written once and the loader
+  applied them in document order, so a config holding `0.1` and `0.87` ran at 0.87
+  while the file and the log both said 0.1.
 - **Loudness is carried by brightness, not length**, so length and alpha answer two
   different questions and neither is wasted.
 
@@ -175,7 +181,7 @@ interop checks are in `src/BaldingAudio.App/Audio/InteropSelfCheck.cs`, because 
 Win32 declarations live in App and Core must stay free of them. The capture-handoff
 checks are in `src/BaldingAudio.App/AppSelfCheck.cs`, covering the seam between the
 capture thread and the UI thread, which is where a fault is reported as a broken
-analyser. 31 checks total, and all of them run headless on Linux. The interop group
+analyser. 35 checks total, and all of them run headless on Linux. The interop group
 needs no audio device, so a wrong constant is caught in a second rather than on the
 user's machine.
 

@@ -26,14 +26,23 @@ public sealed class OverlayRenderer
         Action<PixelBuffer, int, int>? decal = null)
     {
         buffer.Clear();
+        LastLineCount = 0;
 
         if (events.Count > 0) DrawLines(events, buffer);
         decal?.Invoke(buffer, buffer.Width, buffer.Height);
     }
 
+    /// <summary>
+    /// Lines actually painted on the last frame. Not the number of events handed in:
+    /// anything under the side threshold is tracked but deliberately not drawn, so the
+    /// two numbers differ exactly when the display is holding back.
+    /// </summary>
+    public int LastLineCount { get; private set; }
+
     private void DrawLines(IReadOnlyList<AudioEvent> events, PixelBuffer buffer)
     {
         var lines = OverlayLayout.BuildLines(events, buffer.Width, buffer.Height, _style);
+        LastLineCount = lines.Count;
         var outlineWidth = (float)(_style.OutlineWidthFraction * _style.ThicknessFor(buffer.Width, buffer.Height));
 
         foreach (var l in lines)
