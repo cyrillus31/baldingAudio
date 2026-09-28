@@ -34,6 +34,7 @@ public sealed class OverlayRenderer
     private void DrawLines(IReadOnlyList<AudioEvent> events, PixelBuffer buffer)
     {
         var lines = OverlayLayout.BuildLines(events, buffer.Width, buffer.Height, _style);
+        var outlineWidth = (float)(_style.OutlineWidthFraction * _style.ThicknessFor(buffer.Width, buffer.Height));
 
         foreach (var l in lines)
         {
@@ -49,10 +50,22 @@ public sealed class OverlayRenderer
             var tipX = ax + dx * length;
             var tipY = ay + dy * length;
 
+            // Outline first, fill over it. Both are the same capsule shape at different
+            // radii, so what is left visible is a band of the outline colour around the
+            // edge of the line - a rim of the same hue, not a contrasting frame.
+            //
             // A flat line, no fade and no brighter end. It used to brighten toward the
             // inner tip, to read as reaching in off the border - but nothing is anchored
             // to a border now, so both ends of a line mean the same thing and ramping
             // between them would only imply a direction that is not there.
+            if (outlineWidth >= 0.5f)
+            {
+                buffer.FillCapsule(
+                    ax, ay, tipX, tipY, radius + outlineWidth,
+                    _style.OutlineFor(l.Colour), l.Alpha,
+                    alphaAtStart: 1.0f, alphaAtEnd: 1.0f);
+            }
+
             buffer.FillCapsule(
                 ax, ay, tipX, tipY, radius, l.Colour, l.Alpha,
                 alphaAtStart: 1.0f, alphaAtEnd: 1.0f);

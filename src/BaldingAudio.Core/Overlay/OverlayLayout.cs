@@ -80,6 +80,57 @@ public sealed class OverlayStyle
     public double FieldRadiusYFraction { get; set; } = 0.84;
 
     /// <summary>
+    /// Width of the outline drawn around each line, as a fraction of the line's own
+    /// thickness. 0 disables it.
+    ///
+    /// This is a visibility fix, not a new look. A single flat line vanishes against a
+    /// dark scene: Battlefield's interiors and night maps are mostly dark, and a
+    /// semi-transparent red line over near-black reads as nothing at all. A second,
+    /// slightly wider copy underneath in a lighter version of the same colour gives the
+    /// line an edge, and an edge is what separates a shape from its background.
+    ///
+    /// Deliberately a halo of the same hue rather than a black bar with a white
+    /// outline: the user asked for two similar colours, not for a high-contrast frame.
+    /// The outline is drawn first and the fill over it, so the visible result is a
+    /// rounded line with a soft rim - the geometry is unchanged, only the paint.
+    /// </summary>
+    public double OutlineWidthFraction { get; set; } = 0.55;
+
+    /// <summary>
+    /// How far the outline colour is pushed toward white, 0..1. Keeps the rim the same
+    /// hue as the fill so the pair reads as one object.
+    /// </summary>
+    public double OutlineLighten { get; set; } = 0.55;
+
+    /// <summary>Extra opacity on the outline, relative to the line's own alpha.</summary>
+    public double OutlineAlphaGain { get; set; } = 1.0;
+
+    /// <summary>Line thickness in pixels, before any outline.</summary>
+    public double ThicknessFor(int screenWidth, int screenHeight)
+        => Math.Max(3.0, LineThicknessFraction * Math.Min(screenWidth, screenHeight));
+
+    /// <summary>
+    /// Half the total painted height of a line, outline included.
+    ///
+    /// The band radius is computed from this rather than from the fill thickness, so the
+    /// margin the layout promises from the top and bottom edges is measured against what
+    /// is actually on screen. Using the fill thickness alone would let the rim of the
+    /// frontmost and rearmost cues cross the margin the geometry is built to keep.
+    /// </summary>
+    public double PaintedHalfThickness(int screenWidth, int screenHeight)
+        => ThicknessFor(screenWidth, screenHeight) * (0.5 + Math.Max(0.0, OutlineWidthFraction));
+
+    /// <summary>
+    /// The outline colour for a line: the same hue, lighter, optionally more opaque.
+    /// The line's own alpha is applied by the renderer as with the fill, so this only
+    /// deals with the colour and the base opacity of the class colour.
+    /// </summary>
+    public Rgba OutlineFor(Rgba fill)
+        => fill
+            .Lighten(Math.Clamp(OutlineLighten, 0.0, 1.0))
+            .ScaleAlpha(Math.Max(0.0, OutlineAlphaGain));
+
+    /// <summary>
     /// All cues share one colour for now. Colour is not carrying information; the
     /// per-class entries exist so it can be switched on later without touching the
     /// renderer.
@@ -112,6 +163,21 @@ public readonly record struct Rgba(byte R, byte G, byte B, byte A)
     public Rgba WithAlpha(byte a) => this with { A = a };
 
     public Rgba ScaleAlpha(double f) => this with { A = (byte)Math.Clamp(A * f, 0, 255) };
+
+    /// <summary>
+    /// Moves the colour <paramref name="f"/> of the way toward white, keeping the hue.
+    ///
+    /// Used for the line outline. Interpolating toward white rather than scaling the RGB
+    /// channels up is what keeps a red outline red instead of turning it pink: a
+    /// multiplier would clip the red channel to 255 immediately and leave only green and
+    /// blue to grow.
+    /// </summary>
+    public Rgba Lighten(double f)
+    {
+        f = Math.Clamp(f, 0.0, 1.0);
+        static byte Mix(byte c, double f) => (byte)Math.Round(c + (255 - c) * f);
+        return new Rgba(Mix(R, f), Mix(G, f), Mix(B, f), A);
+    }
 }
 
 /// <summary>A line ready to be drawn, in pixels. The anchor is on the screen border.</summary>
@@ -181,7 +247,11 @@ public static class OverlayLayout
         var shortest = Math.Min(screenWidth, screenHeight);
         var inset = style.FieldInsetFraction * shortest;
         var sideInset = style.SideInsetFraction * shortest;
-        var halfThickness = Math.Max(3.0, style.LineThicknessFraction * shortest) * 0.5;
+
+        // Includes the outline. The band is inset from the top and bottom so nothing
+        // reaches those edges, and that promise is only true of the pixels actually
+        // painted - the rim of a line extends past its fill.
+        var halfThickness = style.PaintedHalfThickness(screenWidth, screenHeight);
 
         // Centre the band vertically, then scale it about that centre, so shrinking the
         // radius pulls both extremes toward the middle of the screen.

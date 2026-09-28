@@ -33,6 +33,7 @@ public static class SelfTest
             TestSilenceProducesNothing(),
             TestLinesRunInwardFromTheSideEdges(),
             TestLinesStaySmall(),
+            TestLinesHaveAReadableOutline(),
             TestLineFollowsAMovingSound(),
             TestLineFallsWhenSoundStops(),
         };
@@ -434,8 +435,11 @@ public static class SelfTest
                 return new(N, false, $"azimuth {az:F0} starts at x={outerX:F0}, expected the side edge at {expectedOuter:F0}");
 
             // Nothing may reach the top or the bottom, at any bearing, at full loudness.
-            var y0 = l.Y - l.Thickness * 0.5;
-            var y1 = l.Y + l.Thickness * 0.5;
+            // Measured against the painted extent, which includes the outline - the
+            // promise is about pixels on screen, not about the fill's geometry.
+            var half = style.PaintedHalfThickness(W, H);
+            var y0 = l.Y - half;
+            var y1 = l.Y + half;
             if (y0 < inset - 0.5 || y1 > H - inset + 0.5)
                 return new(N, false,
                     $"azimuth {az:F0} drew a line at y {y0:F0}..{y1:F0}, " +
@@ -496,6 +500,140 @@ public static class SelfTest
 
         return new("lines stay small", true, $"loudest line {l.Length:F0}px, thickness {l.Thickness:F0}px, limit {limit:F0}px");
     }
+
+    /// <summary>
+    /// Every line needs an outline, in a similar colour, or it disappears over a dark
+    /// scene.
+    ///
+    /// The user's report: dark lines are invisible. Battlefield's night maps and
+    /// interiors are mostly dark, and a single flat semi-transparent line over near-black
+    /// is effectively not there. Two things have to hold for the fix to work, and both
+    /// are invisible to a geometry test:
+    ///
+    ///   * the painted line really has two bands of different colour, so the rim is
+    ///     being drawn at all - a style property that exists but is never used would
+    ///     pass any amount of layout checking
+    ///   * the outer band is *lighter* than the fill, because a rim darker than the line
+    ///     does not separate it from a dark background, it just makes the line fatter
+    ///
+    /// Two similar colours, not a high-contrast frame: the check is that the outline
+    /// keeps the fill's hue, not that it is a different colour entirely.
+    /// </summary>
+    private static Result TestLinesHaveAReadableOutline()
+    {
+        const int W = 800, H = 600;
+        var style = OverlayStyle.Default();
+        var renderer = new OverlayRenderer(style);
+
+        var events = new List<AudioEvent>
+        {
+            new(new Direction(-40, 0), 1.0, 0, SoundClass.Gunshot, 1, 1, 1, 0),
+        };
+
+        var buffer = new PixelBuffer(W, H);
+        renderer.Render(events, buffer);
+
+        var line = OverlayLayout.BuildLines(events, W, H, style)[0];
+
+        // Sample a column through the middle of the line, well past the anti-aliased
+        // end caps, so what comes back is the line's own cross-section.
+        var midX = Math.Clamp((int)(line.X + line.Dx * line.Length * 0.5), 0, W - 1);
+
+        // The cross-section is sampled at two known distances from the line's centre
+        // rather than scanned for bands, because the geometry already says where the two
+        // colours must be: the fill occupies the middle, the rim the band outside it.
+        //
+        // A scan for "two distinct colours" would pass on a rim drawn down the centre of
+        // the line, and a scan filtered by alpha would miss the rim entirely - the rim is
+        // painted *under* the fill, so its alpha is the class colour's alpha and lower
+        // than the composited centre. That is correct, not a defect; it just means
+        // "which pixel is brightest" is not a reliable way to find it.
+        var half = line.Thickness * 0.5;
+        var outlinePx = style.OutlineWidthFraction * line.Thickness;
+
+        static int Luma(int r, int g, int b) => r + g + b;
+
+        // Un-premultiply, so two colours at different alphas compare like for like. The
+        // buffer is premultiplied (see PixelBuffer.Pack), so a raw byte comparison
+        // measures coverage as much as colour.
+        static (int R, int G, int B) Straight(uint px)
+        {
+            var a = px >> 24;
+            if (a == 0) return (0, 0, 0);
+            return ((int)((px & 0xFF) * 255L / a),
+                    (int)(((px >> 8) & 0xFF) * 255L / a),
+                    (int)(((px >> 16) & 0xFF) * 255L / a));
+        }
+
+        uint At(double offsetFromCentre)
+        {
+            var py = (int)Math.Round(line.Y + offsetFromCentre);
+            if (py < 0 || py >= H) return 0;
+            return buffer.Pixels[py * W + midX];
+        }
+
+        if (At(0) == 0)
+            return new(NO, false, $"nothing was painted at x={midX}");
+
+        // Sample in the middle of each band, not at its inner boundary: the fill's
+        // anti-aliased edge blends into the rim, so the pixel just outside the fill is
+        // part of the fill's ramp rather than the rim.
+        var fillPx = At(0);
+        var rimOffset = half + outlinePx * 0.5;
+        var rimAbove = At(-rimOffset);
+        var rimBelow = At(rimOffset);
+
+        if (rimAbove == 0 || rimBelow == 0)
+            return new(NO, false,
+                $"nothing is painted {rimOffset:F1}px from the line's centre " +
+                $"(thickness {line.Thickness:F0}px, outline would put the rim at " +
+                $"{rimOffset:F1}px), so the line is no wider than its fill");
+
+        var fill = Straight(fillPx);
+        var above = Straight(rimAbove);
+        var below = Straight(rimBelow);
+
+        // Alpha must be taken at face value. Blend used to hard-set the destination alpha
+        // to 0xFF, which made every edge look solid while carrying colour premultiplied
+        // for a much lower alpha - a dark halo, the exact thing premultiplication exists
+        // to prevent. A line that is meant to be semi-transparent and reads as fully
+        // opaque means the alpha channel is being ignored somewhere.
+        var fillAlpha = fillPx >> 24;
+        if (fillAlpha >= 255)
+            return new(NO, false,
+                $"the line's centre is fully opaque (alpha {fillAlpha}); a line is meant to be " +
+                "semi-transparent, so a buffer claiming 255 here is not reporting its real coverage");
+
+        // The rim has to be lighter than the fill, or it does not separate the line from
+        // a dark background - it only makes the line fatter.
+        var fillLuma = Luma(fill.R, fill.G, fill.B);
+        var aboveLuma = Luma(above.R, above.G, above.B);
+        var belowLuma = Luma(below.R, below.G, below.B);
+
+        if (aboveLuma < fillLuma + 30 || belowLuma < fillLuma + 30)
+            return new(NO, false,
+                $"the rim is not lighter than the fill (fill luma {fillLuma}, " +
+                $"rim {aboveLuma} above and {belowLuma} below), so it will not separate the " +
+                "line from a dark scene");
+
+        // Two similar colours, not two different ones. The rim is the fill pushed toward
+        // white, so every channel moves the same way and the dominant one stays dominant.
+        // An outline that inverted the hue would read as a second object rather than an
+        // edge on the first.
+        if (above.R < fill.R)
+            return new(NO, false,
+                $"the outline ({above.R},{above.G},{above.B}) is not a lighter version of the " +
+                $"fill ({fill.R},{fill.G},{fill.B}); the two must be the same hue");
+
+        var rimLuma = Math.Max(aboveLuma, belowLuma);
+        return new(NO, true,
+            $"rim {outlinePx:F1}px on each side of a {line.Thickness:F0}px line, sampled at " +
+            $"{rimOffset:F1}px from centre; fill ({fill.R},{fill.G},{fill.B}) luma {fillLuma} to " +
+            $"rim ({above.R},{above.G},{above.B}) luma {rimLuma}, same hue and lighter, " +
+            $"centre alpha {fillAlpha}");
+    }
+
+    private const string NO = "every line has a lighter outline of the same hue, so it reads on a dark scene";
 
     /// <summary>
     /// The behaviour the user asked for by name: a sound moving from the left to the

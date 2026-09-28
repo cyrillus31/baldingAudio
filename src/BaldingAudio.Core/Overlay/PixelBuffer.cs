@@ -39,7 +39,26 @@ public sealed class PixelBuffer
         return (uint)(av << 24 | b << 16 | g << 8 | r);
     }
 
-    /// <summary>Composites a source pixel over the existing destination.</summary>
+    /// <summary>
+    /// Composites a source pixel over the existing destination, in premultiplied alpha.
+    ///
+    /// The "over" operator is
+    /// <code>
+    ///     ao = as + ab * (1 - as)
+    ///     co = cs + cb * (1 - as)
+    /// </code>
+    /// and both halves matter. The colour half is the one usually written; the alpha half
+    /// used to be skipped, with the destination alpha hard-set to <c>0xFF</c>.
+    ///
+    /// <para>
+    /// That is wrong, and visibly so. Every partially covered pixel - which is every
+    /// anti-aliased edge, and therefore a whole ring around every line - was written with
+    /// the colour premultiplied down for a low alpha but the alpha byte claiming to be
+    /// fully opaque. The edge pixels were then composited by GDI as solid dark colour:
+    /// the exact "dark halo" that <see cref="Pack"/> exists to prevent. It also made a
+    /// half-transparent line look fully opaque, so a line's own alpha meant nothing.
+    /// </para>
+    /// </summary>
     private void Blend(int index, uint src)
     {
         var sa = src >> 24;
@@ -49,12 +68,18 @@ public sealed class PixelBuffer
             _pixels[index] = src;
             return;
         }
+
         var dst = _pixels[index];
-        var inv = 255 - sa;
-        var r = (byte)((src & 0xFF) + ((dst & 0xFF) * inv + 127) / 255);
-        var g = (byte)(((src >> 8) & 0xFF) + (((dst >> 8) & 0xFF) * inv + 127) / 255);
-        var b = (byte)(((src >> 16) & 0xFF) + (((dst >> 16) & 0xFF) * inv + 127) / 255);
-        _pixels[index] = 0xFF000000u | (uint)(b << 16) | (uint)(g << 8) | r;
+        var inv = 255 - (int)sa;
+
+        static int Over(byte s, byte d, int inv) => s + (d * inv + 127) / 255;
+
+        var r = (byte)Over((byte)src, (byte)dst, inv);
+        var g = (byte)Over((byte)(src >> 8), (byte)(dst >> 8), inv);
+        var b = (byte)Over((byte)(src >> 16), (byte)(dst >> 16), inv);
+        var a = (byte)Over((byte)sa, (byte)(dst >> 24), inv);
+
+        _pixels[index] = (uint)(a << 24 | b << 16 | g << 8 | r);
     }
 
     /// <summary>
