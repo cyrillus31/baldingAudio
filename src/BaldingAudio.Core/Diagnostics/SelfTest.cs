@@ -43,6 +43,10 @@ public static partial class SelfTest
             TestCentredStereoSourceHasNoSide(),
             TestBarLengthAndEdgeComeFromTheImbalance(),
             TestMeasuredImbalanceHasTheRightSign(),
+            TestTestAudioIsPannedAsAsked(),
+            TestGeneratedWavIsWellFormed(),
+            TestCrossingFootstepIsMeasuredCrossing(),
+            TestAmbienceDoesNotFakeADirection(),
             TestLoudCentredSoundDoesNotHideASideSound(),
         };
         foreach (var r in results)
