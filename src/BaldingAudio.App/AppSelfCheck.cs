@@ -31,6 +31,7 @@ internal static class AppSelfCheck
         var results = new List<Check>
         {
             CheckPublishDeliversTheCurrentFrame(),
+            CheckAmbiguitySurvivesTheHandoff(),
             CheckSnapshotIsStableWhileTheCaptureThreadRuns(),
             CheckHealthyIterationDoesNotReopen(),
             CheckSilenceCanNeverCauseAReopen(),
@@ -125,6 +126,60 @@ internal static class AppSelfCheck
     /// Checked by snapshotting while a writer is publishing, and confirming every
     /// snapshot is internally consistent.
     /// </summary>
+    private const string AmbiguityName =
+        "the 'side unknown' flag survives the capture-to-UI handoff";
+
+    /// <summary>
+    /// The ambiguity flag has to arrive at the UI thread, and it is easy to leave it
+    /// behind.
+    ///
+    /// <para>
+    /// <c>Snapshot</c> rebuilds a fresh <see cref="DirectionSpectrum"/> from the bins
+    /// alone, so a flag set on the capture thread's instance arrives false. The headless
+    /// checks publish and read the same object, so they would not notice: the overlay
+    /// would keep drawing a cue with no known side on one arbitrary edge while every
+    /// check stayed green. That is precisely the "a check that cannot fail" trap, and it
+    /// is the whole reason this check lives next to the exchange rather than in Core.
+    /// </para>
+    /// </summary>
+    private static Check CheckAmbiguitySurvivesTheHandoff()
+    {
+        var exchange = new SpectrumExchange();
+        var spectrum = new DirectionSpectrum(exchange.Bins);
+
+        // A source with no knowable side: loud, and flagged.
+        spectrum.Clear();
+        spectrum.Add(-6, 0.8);
+        spectrum.Ambiguous = true;
+        exchange.Publish(spectrum);
+
+        var flagged = exchange.Snapshot();
+        if (flagged is null)
+            return new(AmbiguityName, false, "nothing was published by the first Publish");
+        if (!flagged.Ambiguous)
+            return new(AmbiguityName, false,
+                "a frame published as having no known side arrived at the UI thread claiming to " +
+                "know its side, so the overlay would draw it on one arbitrary edge");
+
+        // And a frame that DOES know its side must not inherit the flag from the frame
+        // before it, which is the same class of mistake one step later.
+        spectrum.Clear();
+        spectrum.Add(-70, 0.8);
+        spectrum.Ambiguous = false;
+        exchange.Publish(spectrum);
+
+        var decided = exchange.Snapshot();
+        if (decided is null)
+            return new(AmbiguityName, false, "the second Publish did not arrive");
+        if (decided.Ambiguous)
+            return new(AmbiguityName, false,
+                "a frame with a definite side arrived flagged as unknown, so a real sound " +
+                "would be mirrored onto both edges");
+
+        return new(AmbiguityName, true,
+            "a frame with no known side arrived flagged, and a frame with a definite side arrived unflagged");
+    }
+
     private static Check CheckSnapshotIsStableWhileTheCaptureThreadRuns()
     {
         var exchange = new SpectrumExchange();

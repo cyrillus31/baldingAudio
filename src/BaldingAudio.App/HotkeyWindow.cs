@@ -7,21 +7,30 @@ namespace BaldingAudio.App;
 /// Global hotkeys. The overlay is click-through and the game owns the mouse and most
 /// of the keyboard, so the only practical way to reach the app is a global hotkey.
 ///
-///   Ctrl+Alt+B  show/hide the display
-///   Ctrl+Alt+P  switch between the edge and compact layouts
-///   Ctrl+Alt+D  run the analyser self-test
-///   Ctrl+Alt+Q  quit
+///   Ctrl+Alt+Shift+B  show/hide the display
+///   Ctrl+Alt+Shift+P  switch between the edge and compact layouts
+///   Ctrl+Alt+Shift+D  run the analyser self-test
+///   Ctrl+Alt+Shift+Q  quit
 ///
-/// The combinations are chosen to be implausible in a game, so they cannot be
-/// swallowed by a fullscreen title or fire a real game action.
-/// </summary>
+/// All four carry Shift, and that is a fix rather than a style choice. Without it, the
+/// show/hide key was Ctrl+Alt+B, and the user's field log recorded it firing four times
+/// unprompted partway through a game - the overlay paused itself and, because pausing
+/// cleared every line, looked exactly like a crash. Something in the game or in
+/// peripheral software was sending that combination. A three-modifier chord is not a
+/// thing those send by accident, so the collision is much less likely to recur, and
+/// pausing now freezes the display rather than blanking it, so if one ever does, it will
+/// be visible rather than looking like a fault.
 internal sealed class HotkeyWindow : NativeWindow, IDisposable
 {
     private const int WM_HOTKEY = 0x0312;
     private const int WM_DISPLAY_CHANGE = 0x007E;
 
-    private const uint MOD_CONTROL = 0x0002;
+    // Values from the Win32 header, not from memory.
     private const uint MOD_ALT = 0x0001;
+    private const uint MOD_CONTROL = 0x0002;
+    private const uint MOD_SHIFT = 0x0004;
+
+    private const uint Modifiers = MOD_CONTROL | MOD_ALT | MOD_SHIFT;
 
     private readonly AppHost _host;
     private readonly Dictionary<int, Action> _actions = new();
@@ -50,11 +59,11 @@ internal sealed class HotkeyWindow : NativeWindow, IDisposable
     private void Bind(byte vk, Action action)
     {
         var id = _nextId++;
-        if (!RegisterHotKey(Handle, id, MOD_CONTROL | MOD_ALT, vk))
+        if (!RegisterHotKey(Handle, id, Modifiers, vk))
         {
             // Another app already owns this combination. Not fatal: the tray menu
             // still works, so carry on and just say so.
-            Log.Warn($"hotkey Ctrl+Alt+{(char)vk} is already taken by another application");
+            Log.Warn($"hotkey Ctrl+Alt+Shift+{(char)vk} is already taken by another application");
             return;
         }
         _actions[id] = action;

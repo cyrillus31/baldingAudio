@@ -34,6 +34,7 @@ public sealed class EventTracker
         public double Dbfs;
         public double ClassConfidence;
         public SoundClass Class;
+        public bool Ambiguous;
         public long Id;
     }
 
@@ -57,6 +58,32 @@ public sealed class EventTracker
 
     /// <summary>Below this level a bearing is considered noise, not a moved source.</summary>
     public double FollowThreshold { get; set; } = 0.06;
+
+    /// <summary>
+    /// Level at which a bearing with no line near it starts one.
+    ///
+    /// <para>
+    /// Deliberately higher than <see cref="FollowThreshold"/>. Following an existing
+    /// line is cheap and a low bar is right for it, because the line is already on
+    /// screen. Starting a line is not: it puts something new in the player's field of
+    /// view, so it takes a clearly audible bearing rather than a merely present one.
+    /// </para>
+    /// </summary>
+    public double SpectrumStartThreshold { get; set; } = 0.18;
+
+    /// <summary>
+    /// How far, in degrees, a bearing may sit from a line and still be considered the
+    /// same source - both when re-aiming a line and when deciding not to start one.
+    ///
+    /// <para>
+    /// Much wider than <see cref="FollowWindowDegrees"/>, and it has to be. On a
+    /// two-channel endpoint the whole spectrum is one bearing measured by interaural
+    /// timing, and that bearing jumps tens of degrees between frames as the content
+    /// changes. A tight window strands a line that is plainly still sounding, and makes
+    /// a wandering one spawn a new line every frame instead of travelling.
+    /// </para>
+    /// </summary>
+    public double StartWindowDegrees { get; set; } = 75.0;
 
     /// <summary>Two events closer than this on the front/back axis are one cue.</summary>
     public double MergeWindowDegrees { get; set; } = 16.0;
@@ -96,6 +123,7 @@ public sealed class EventTracker
             t.Age = 0;
             t.Silence = 0;
             t.Dbfs = Math.Max(t.Dbfs, e.Dbfs);
+            t.Ambiguous = e.Ambiguous;
             if (Rank(e.Class) >= Rank(t.Class))
             {
                 t.Class = e.Class;
@@ -116,15 +144,31 @@ public sealed class EventTracker
             Dbfs = e.Dbfs,
             Class = e.Class,
             ClassConfidence = e.ClassConfidence,
+            Ambiguous = e.Ambiguous,
             Id = _nextId++,
         });
 
+        TrimToLimit();
+    }
+
+    /// <summary>
+    /// Adds a line the sound field asked for rather than an onset, and applies the same
+    /// cap. Class and dBFS are left at their defaults: a line started from the spectrum
+    /// has no onset behind it, so there is nothing honest to label it with.
+    /// </summary>
+    private void AddTrack(Track t)
+    {
+        t.Id = _nextId++;
+        _tracks.Add(t);
+        TrimToLimit();
+    }
+
+    private void TrimToLimit()
+    {
         const int maxTracks = 12;
-        if (_tracks.Count > maxTracks)
-        {
-            _tracks.Sort(static (a, b) => (b.Level * (1 + Rank(b.Class))).CompareTo(a.Level * (1 + Rank(a.Class))));
-            _tracks.RemoveRange(maxTracks, _tracks.Count - maxTracks);
-        }
+        if (_tracks.Count <= maxTracks) return;
+        _tracks.Sort(static (a, b) => (b.Level * (1 + Rank(b.Class))).CompareTo(a.Level * (1 + Rank(a.Class))));
+        _tracks.RemoveRange(maxTracks, _tracks.Count - maxTracks);
     }
 
     private static double FrontBackOf(double azimuth) => OverlayLayout.FrontBackToVertical(azimuth) * 180.0;
@@ -145,6 +189,9 @@ public sealed class EventTracker
     public void Tick(double dt)
     {
         if (dt <= 0) return;
+
+        // Frozen: hold every line exactly as it is. See Freeze.
+        if (_frozen) return;
 
         for (var i = _tracks.Count - 1; i >= 0; i--)
         {
@@ -169,13 +216,22 @@ public sealed class EventTracker
     }
 
     /// <summary>
-    /// Re-measures every live line against the current sound field. This is what makes
-    /// a line travel as its source moves, and what makes it rise and fall with the
-    /// sound instead of only reacting to new events.
+    /// Re-measures every live line against the current sound field, and starts lines
+    /// for bearings that are loud with nothing on screen to show for them.
+    ///
+    /// <para>
+    /// Starting lines here is the point. A track used to be created only by an onset,
+    /// so a sound that was already sounding when the last onset passed - music, a
+    /// sustained burst of gunfire, footsteps while walking - had a live, loud direction
+    /// spectrum and nothing on screen. The field log showed the spectrum loud on 109 of
+    /// 119 heartbeats with a line on 27.
+    /// </para>
     /// </summary>
     public void Follow(DirectionSpectrum spectrum, double dt)
     {
         if (spectrum is null || dt <= 0) return;
+
+        var (globalAz, globalLevel) = spectrum.Peak();
 
         for (var i = 0; i < _tracks.Count; i++)
         {
@@ -186,6 +242,7 @@ public sealed class EventTracker
             if (peakLevel >= FollowThreshold)
             {
                 t.TargetLevel = peakLevel;
+                t.Ambiguous = spectrum.Ambiguous;
 
                 // Slew toward the louder bearing, but only when it is actually louder
                 // than where the line already is. Otherwise a line would drift toward
@@ -198,13 +255,39 @@ public sealed class EventTracker
                     var move = Math.Clamp(delta, -maxStep, maxStep);
                     t.Azimuth = DirectionSpectrum.Wrap180(t.Azimuth + move);
                 }
+                continue;
             }
-            else
+
+            // Nothing inside the tight follow window. Before writing the line off,
+            // check the wider start window: on a two-channel endpoint the measured
+            // bearing moves by tens of degrees between frames, and a tight window would
+            // retire a line for a source that never stopped sounding.
+            if (globalLevel >= SpectrumStartThreshold &&
+                Math.Abs(DirectionSpectrum.Wrap180(globalAz - t.Azimuth)) <= StartWindowDegrees)
             {
-                // Nothing measured there: let the line fall back rather than hold.
-                t.TargetLevel = 0;
+                t.TargetLevel = globalLevel;
+                t.Ambiguous = spectrum.Ambiguous;
+                continue;
             }
+
+            // Nothing measured there: let the line fall back rather than hold.
+            t.TargetLevel = 0;
         }
+
+        if (globalLevel < SpectrumStartThreshold) return;
+        foreach (var t in _tracks)
+            if (Math.Abs(DirectionSpectrum.Wrap180(globalAz - t.Azimuth)) <= StartWindowDegrees)
+                return;
+
+        AddTrack(new Track
+        {
+            Azimuth = globalAz,
+            Level = globalLevel,
+            TargetLevel = globalLevel,
+            Confidence = 0.5,
+            DistanceConfidence = 0.0,
+            Ambiguous = spectrum.Ambiguous,
+        });
     }
 
     /// <summary>One-pole envelope step: rise at the attack rate, fall at the release rate.</summary>
@@ -222,6 +305,29 @@ public sealed class EventTracker
 
     public void Clear() => _tracks.Clear();
 
+    private bool _frozen;
+
+    /// <summary>
+    /// Holds the display still, without emptying it.
+    ///
+    /// <para>
+    /// This exists because pausing used to call <see cref="Clear"/>, and that made a
+    /// pause look exactly like a crash: the user saw the overlay disappear partway
+    /// through a game and had no way to tell a toggle from a fault. Freezing keeps the
+    /// last frame on screen, so the overlay is still visibly there and still visibly
+    /// wrong rather than simply gone.
+    /// </para>
+    ///
+    /// <para>
+    /// Not a pause of the whole app: the capture thread and the analyser keep running,
+    /// and the lines resume from live data on <see cref="Thaw"/>.
+    /// </para>
+    /// </summary>
+    public void Freeze() => _frozen = true;
+
+    /// <summary>Releases a freeze, and lets the envelopes run again from here.</summary>
+    public void Thaw() => _frozen = false;
+
     public List<AudioEvent> Snapshot()
     {
         var list = new List<AudioEvent>(_tracks.Count);
@@ -236,7 +342,10 @@ public sealed class EventTracker
                 t.ClassConfidence,
                 t.Confidence,
                 t.DistanceConfidence,
-                0));
+                0)
+            {
+                Ambiguous = t.Ambiguous,
+            });
         }
         return list;
     }

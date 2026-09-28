@@ -12,6 +12,84 @@ rejected.
 
 ---
 
+## Second field round, 2026-09-28 — three more faults, all fixed
+
+The three problems above were closed by reasoning about the log, and three of the
+conclusions were wrong. A second session with the running binary on the user's machine
+found the real ones. **Read this before trusting any of the diagnoses above**, and read
+it as the argument for watching a running program rather than reading its output.
+
+### 4. A loud sound could draw nothing at all — FIXED
+
+> "when i play music it just shows on the left side"
+
+and, from the same session, gunfire and explosions "were not shown at all".
+
+**The spectrum was loud and the screen was blank, and nothing in the code connected the
+two.** Over one stretch of play the direction spectrum measured 0.4–0.8 on **109 of 119**
+one-second heartbeats, and a line was drawn on **27**. `EventTracker.Follow` could only
+*update* tracks that already existed; a track was only ever created by an onset. Onsets
+fired 7 times in two minutes. So a continuous sound — music, a sustained burst of
+firearms — fired one onset, kept sounding, and drew nothing for as long as it played.
+
+Worse, `Follow` searched only ±30° around a line while the stereo bearing moves tens of
+degrees between frames (the log shows `-8, 8, -52, 52, 128`). A line that did exist lost
+its source and was retired in 0.45 s.
+
+The fix: the sound field can now *start* a line, not only sustain one. Two thresholds,
+because they are different decisions — `FollowThreshold` (0.06) to keep a line that is
+already on screen, `SpectrumStartThreshold` (0.18) to put a new one there, and
+`StartWindowDegrees` (75) to decide whether a loud bearing and a line are the same source.
+The wide window is not a fudge; the narrow one is what stranded lines that were plainly
+still sounding.
+
+### 5. A centred source was assigned a side at random — FIXED
+
+> "if music plays in both headphonse you somewhat randomly decide where to show it on left
+> or on the right, but that should not happen. if you don't know where to show the sound
+> show it on both side for for now."
+
+`StereoItd` only admitted "I don't know" when the lateral angle was under 5° **and** the
+level difference under 3 dB. Real music sits just outside that box with whichever sign
+the noise favoured, and the display turns the sign of the bearing into "start at the left
+edge" or "start at the right edge". So the same centred sound landed on one edge at
+random, which is what "always on the left" is when the noise is biased.
+
+Now the estimator says so: a lateral angle under `AmbiguousLateralDegrees` (25°) is
+reported as having **no side**, and `OverlayLayout` draws such a cue from **both** edges at
+the same height. Negating the azimuth mirrors the edge and leaves `|azimuth|` alone, so
+the pair cannot be read as two separate bearings. A source genuinely off to one side is
+unaffected, and multichannel never mirrors at all — every speaker there really does have a
+side.
+
+This is honest rather than clever: the distance from ahead is still shown, and the one
+thing the signal cannot tell us is simply not claimed.
+
+### 6. The overlay was pausing itself — FIXED
+
+> "the overlay sometimes disappears from the game, i have to go back to desktop"
+
+**This was the `Ctrl+Alt+B` hotkey firing, not a windowing fault.** The log from that
+session shows four `paused`/`resumed` pairs at 12:23:44, 12:24:42, 12:24:45 and
+12:24:48, then a final `paused` with no resume after it. Capture was healthy throughout:
+502 heartbeats, zero re-opens, zero stalls, zero failures. Something in the game or in
+peripheral software was sending that combination.
+
+And pausing called `EventTracker.Clear`, so a pause wiped every line and was pixel-for-
+pixel identical to a crash. That is why it read as a fault for so long.
+
+Fixed in three parts: pause now **freezes** the display instead of clearing it, the status
+line says `PAUSED`, and all four hotkeys moved to `Ctrl+Alt+Shift+…` — a three-modifier
+chord is not a thing a game sends by accident. If one ever does collide again, the
+overlay will hold still rather than vanish.
+
+**Worth keeping from this round:** the topmost-window reasoning was right all along and was
+never the problem. `WS_EX_TOPMOST` at creation, `SetWindowPos(HWND_TOPMOST, …)` re-asserted
+every frame at 60 Hz, `WS_EX_TRANSPARENT`, `WS_EX_NOACTIVATE`. Checked before looking
+anywhere else, and it held up.
+
+---
+
 ## 1. The overlay sometimes stops appearing over the game — FIXED (`b5e998d`)
 
 > "the overlay sometimes disappears from the game, i have to go back to desktop and open
@@ -137,6 +215,18 @@ co = cs + cb * (1 - as)
   problem 2's real cause was misread as a DSP problem. The self-test now has a third
   group for it (`AppSelfCheck`) alongside the DSP checks and the Win32 checks, so this
   class of fault is covered rather than inferred from a log line.
-- **The `--selftest` suite is 21 checks** and runs headless on Linux: 13 DSP and display,
-  6 Win32 interop, 2 capture handoff, all in seconds. Extend it rather than leaving a fix
-  unverified — two of the three bugs above were only findable by adding to it.
+- **The `--selftest` suite is 31 checks** and runs headless on Linux: 18 DSP and display,
+  6 Win32 interop, 7 capture handoff, all in seconds. Extend it rather than leaving a fix
+  unverified — three of the four bugs above were only findable by adding to it.
+- **A field diagnosis is a hypothesis, not a finding.** Four of the diagnoses in this
+  document were wrong on the first pass: the ITD correlation window, the display floor,
+  the "loud but invisible" gate, and the vanishing overlay. In every case the log said
+  something that supported the wrong answer, and running the program on the user's machine
+  said something else. The `peak` field in a heartbeat is a trap in particular: it is
+  sticky — written only when an event is emitted — so `peak -19 dBFS` beside
+  `loudest silent` describes two different moments, not one contradictory reading.
+- **Flags crossing a thread boundary need a check at the boundary.** The "side unknown"
+  flag for fault 5 is set on the capture thread and read on the UI thread, and
+  `Snapshot` rebuilds the spectrum from bins alone. The headless checks publish and read
+  the same object, so they passed while the real overlay silently kept the old behaviour.
+  The check now lives in `AppSelfCheck`, next to the exchange it protects.

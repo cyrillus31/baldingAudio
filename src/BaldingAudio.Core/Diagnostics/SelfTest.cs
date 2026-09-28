@@ -12,7 +12,7 @@ namespace BaldingAudio.Core.Diagnostics;
 /// second person to walk around. It renders a transient onto one speaker of a virtual
 /// 7.1 rig, then asks the analyser where it came from. Run with <c>--selftest</c>.
 /// </summary>
-public static class SelfTest
+public static partial class SelfTest
 {
     private const double SampleRate = 48000;
     private const int FrameSize = 128;
@@ -37,6 +37,10 @@ public static class SelfTest
             TestLinesHaveAReadableOutline(),
             TestLineFollowsAMovingSound(),
             TestLineFallsWhenSoundStops(),
+            TestFrozenOverlayKeepsItsLines(),
+            TestSpectrumCanStartALine(),
+            TestCentredStereoSourceHasNoSide(),
+            TestAmbiguousCueIsDrawnOnBothEdges(),
         };
         foreach (var r in results)
             log?.Invoke($"  [{(r.Passed ? "PASS" : "FAIL")}] {r.Name}: {r.Detail}");
@@ -810,5 +814,145 @@ public static class SelfTest
         var ok = loud > 0.7 && quiet < 0.02;
         return new("a line falls away when the sound stops", ok,
             $"level {loud:F2} while sounding -> {quiet:F2} after one second of silence");
+    }
+
+    private const string N8 = "a paused overlay keeps the lines it had, instead of going blank";
+
+    /// <summary>
+    /// Pausing must freeze the display, not clear it.
+    ///
+    /// <para>
+    /// The user reported the overlay vanishing partway through a game and coming back
+    /// only after showing the desktop. The log showed the cause: the hotkey paused the
+    /// app, and pausing called <c>EventTracker.Clear</c>. Every line was wiped, so a
+    /// pause was pixel-for-pixel identical to a crash, and the user's reasonable
+    /// conclusion was that something had broken.
+    /// </para>
+    ///
+    /// <para>
+    /// The check holds the tracker frozen for far longer than any line could survive
+    /// unfrozen - ten seconds against a hold of 0.9 s and a fade of 0.35 s - so it fails
+    /// unless the freeze genuinely suspends retirement.
+    /// </para>
+    /// </summary>
+    private static Result TestFrozenOverlayKeepsItsLines()
+    {
+        var tracker = new EventTracker();
+        var spectrum = new DirectionSpectrum();
+
+        tracker.Push(new AudioEvent(new Direction(-40, 0), 0.9, -18, SoundClass.Footstep, 1, 1, 1, 0));
+        for (var i = 0; i < 5; i++)
+        {
+            spectrum.Clear();
+            spectrum.Add(-40, 0.9);
+            tracker.Follow(spectrum, 1.0 / 60);
+            tracker.Tick(1.0 / 60);
+        }
+        if (tracker.Visible.Count == 0)
+            return new(N8, false, "the test setup never produced a line to freeze");
+
+        // Paused: the sound field stops updating, exactly as it does when the analyser
+        // is skipped. What must not happen is the display emptying.
+        tracker.Freeze();
+        for (var i = 0; i < 600; i++)   // ten seconds at 60 Hz
+        {
+            spectrum.Clear();
+            tracker.Follow(spectrum, 1.0 / 60);
+            tracker.Tick(1.0 / 60);
+        }
+
+        if (tracker.Visible.Count == 0)
+            return new(N8, false,
+                "ten seconds of pause emptied the display, so a pause is indistinguishable from a crash");
+
+        var held = tracker.Visible[0].Level;
+
+        // Thawed, and still nothing sounding, the line must be allowed to go away -
+        // otherwise "pause" would have become "stuck on screen forever".
+        tracker.Thaw();
+        for (var i = 0; i < 180; i++)
+        {
+            spectrum.Clear();
+            tracker.Follow(spectrum, 1.0 / 60);
+            tracker.Tick(1.0 / 60);
+        }
+        if (tracker.Visible.Count > 0)
+            return new(N8, false, $"after resuming with nothing sounding, {tracker.Visible.Count} line(s) are still up");
+
+        return new(N8, true,
+            $"a line held at level {held:F2} through ten seconds of pause, and cleared once resumed");
+    }
+
+    private const string N5 = "a loud sound shows a line even with no recent onset";
+
+    /// <summary>
+    /// A loud sound must put a line on screen even when no onset has fired recently.
+    ///
+    /// <para>
+    /// This is the fault the user's field log showed. Over one stretch of play the
+    /// direction spectrum was loud on 109 of 119 one-second heartbeats, at levels of
+    /// 0.4 to 0.8, and a line was drawn on 27 of them. <c>Follow</c> could only update
+    /// tracks that already existed, and a track was only ever created by an onset. So a
+    /// continuous sound - music, sustained gunfire - fired one onset, kept sounding, and
+    /// then drew nothing for as long as it played. That is why music showed nothing and
+    /// why shots "were not shown at all".
+    /// </para>
+    ///
+    /// <para>
+    /// The events are discarded on purpose. Pushing them would let the tracker's
+    /// existing onset path create the line, and the check would pass whether or not the
+    /// spectrum can start anything. The whole claim under test is that the sound field
+    /// on its own is enough.
+    /// </para>
+    /// </summary>
+    private static Result TestSpectrumCanStartALine()
+    {
+        const int Ch = 2;
+        var analyzer = new SpatialAnalyzer(SpeakerPosition.Stereo, Ch, SampleRate);
+        var events = new List<AudioEvent>();
+        var tracker = new EventTracker();
+        var block = new float[1024 * Ch];
+        var dt = 1024.0 / SampleRate;
+
+        // A continuous source on the left: the right ear hears it 20 samples late. No
+        // transient anywhere, so this is the music case - it starts once and then never
+        // stops, which is exactly when the onset count stops growing.
+        var peakSpectrum = 0.0;
+        for (var f = 0; f < 300; f++)
+        {
+            for (var i = 0; i < 1024; i++)
+            {
+                var n = f * 1024 + i;
+                block[i * Ch + 0] = Noise(n, 4242);
+                block[i * Ch + 1] = n - 20 >= 0 ? Noise(n - 20, 4242) : 0f;
+            }
+
+            analyzer.Process(block.AsSpan(0, 1024 * Ch), 1024, events);
+            events.Clear();
+
+            for (var b = 0; b < analyzer.Spectrum.Bins; b++)
+                if (analyzer.Spectrum[b] > peakSpectrum) peakSpectrum = analyzer.Spectrum[b];
+
+            tracker.Follow(analyzer.Spectrum, dt);
+            tracker.Tick(dt);
+        }
+
+        if (peakSpectrum < 0.2)
+            return new(N5, false,
+                $"the test signal never reached the spectrum (peak {peakSpectrum:F2}), so it proves nothing");
+
+        if (tracker.Visible.Count == 0)
+            return new(N5, false,
+                $"the spectrum peaked at {peakSpectrum:F2} for 300 frames and not one line was drawn, " +
+                "because a track can only be created by an onset");
+
+        if (!tracker.Visible.Any(e => e.Direction.AzimuthDegrees < 0))
+            return new(N5, false,
+                "a line was drawn but none on the left: " +
+                string.Join(", ", tracker.Visible.Select(e => $"{e.Direction.AzimuthDegrees:F0}")));
+
+        return new(N5, true,
+            $"spectrum peaked at {peakSpectrum:F2} with no onset, and it drew " +
+            $"{tracker.Visible.Count} line(s), including one on the left");
     }
 }

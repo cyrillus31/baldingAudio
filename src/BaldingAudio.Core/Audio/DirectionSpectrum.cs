@@ -30,6 +30,19 @@ public sealed class DirectionSpectrum
     /// <summary>Number of bearings sampled around the full circle.</summary>
     public int Bins { get; }
 
+    /// <summary>
+    /// True when the bearing(s) in this spectrum have no measurable side.
+    ///
+    /// <para>
+    /// One flag rather than one per bin, and that is not a simplification: on a
+    /// two-channel endpoint the whole spectrum is a single bearing measured by
+    /// interaural timing, so there is only ever one thing for it to describe. In
+    /// multichannel mode each bin is a real speaker at a real bearing, so it stays
+    /// false and the overlay never mirrors anything.
+    /// </para>
+    /// </summary>
+    public bool Ambiguous { get; set; }
+
     /// <summary>Level of each bin, 0..1. Not smoothed; the tracker does that.</summary>
     public double this[int bin] => _levels[bin];
 
@@ -37,7 +50,11 @@ public sealed class DirectionSpectrum
     public double AzimuthOf(int bin) => _minAzimuth + (bin + 0.5) * (_spanAzimuth / Bins);
 
     /// <summary>Clears the whole spectrum. Called at the start of every frame.</summary>
-    public void Clear() => Array.Clear(_levels);
+    public void Clear()
+    {
+        Array.Clear(_levels);
+        Ambiguous = false;
+    }
 
     /// <summary>Overwrites one bin. Used to publish a snapshot taken on another thread.</summary>
     public void SetBin(int bin, double level) => _levels[Wrap(bin)] = level;
@@ -71,6 +88,22 @@ public sealed class DirectionSpectrum
         var lower = (int)Math.Floor(t);
         var frac = t - lower;
         return _levels[Wrap(lower)] * (1.0 - frac) + _levels[Wrap(lower + 1)] * frac;
+    }
+
+    /// <summary>
+    /// Loudest bearing anywhere in the spectrum, and its level. Returns NaN and 0 when
+    /// the spectrum is empty, so a caller cannot mistake "nothing is sounding" for a
+    /// real reading at whatever bin happens to be loudest of nothing.
+    /// </summary>
+    public (double Azimuth, double Level) Peak()
+    {
+        var best = 0.0;
+        var bestAz = double.NaN;
+
+        for (var bin = 0; bin < Bins; bin++)
+            if (_levels[bin] > best) { best = _levels[bin]; bestAz = AzimuthOf(bin); }
+
+        return (bestAz, best);
     }
 
     /// <summary>

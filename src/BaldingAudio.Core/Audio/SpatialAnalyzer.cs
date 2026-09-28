@@ -45,6 +45,12 @@ public sealed class SpatialAnalyzer
     /// <summary>Bearing StereoItd measured this frame. Read by BuildSpectrum.</summary>
     private double _stereoAzimuth;
 
+    /// <summary>
+    /// True when the stereo bearing carries no side, so the overlay must not pick one.
+    /// Read by BuildSpectrum and Emit; see <see cref="StereoItd.LastAmbiguous"/>.
+    /// </summary>
+    private bool _stereoAmbiguous;
+
     private readonly double[] _bandEnergy = new double[BandCount];
     private readonly double[][] _channelBand;
     private readonly double[] _channelTotal = new double[MaxChannels];
@@ -213,7 +219,11 @@ public sealed class SpatialAnalyzer
         var totalWeighted = _bandEnergy[0] + 2.0 * _bandEnergy[1] + 1.5 * _bandEnergy[2];
 
         _useStereo = useStereo;
-        if (useStereo) _stereoAzimuth = _stereo.Result.Direction.AzimuthDegrees;
+        if (useStereo)
+        {
+            _stereoAzimuth = _stereo.Result.Direction.AzimuthDegrees;
+            _stereoAmbiguous = _stereo.LastAmbiguous;
+        }
 
         // Publish the current sound field every frame, not only on onsets, so the
         // overlay can follow a sound that is moving. Same per-channel energy the
@@ -294,7 +304,11 @@ public sealed class SpatialAnalyzer
 
             var db = Decibel.FromMeanSquare(total);
             var level = Decibel.ToUnit(db, _tuning.DisplayFloorDb, _tuning.DisplayCeilingDb, _tuning.LevelExponent);
-            if (level > 0) Spectrum.Add(_stereoAzimuth, level);
+            if (level > 0)
+            {
+                Spectrum.Add(_stereoAzimuth, level);
+                Spectrum.Ambiguous = _stereoAmbiguous;
+            }
             return;
         }
 
@@ -362,7 +376,12 @@ public sealed class SpatialAnalyzer
             clsConf,
             _eventConfidence,
             _eventDistanceConfidence,
-            _eventStartClock));
+            _eventStartClock)
+        {
+            // Only meaningful on a two-channel endpoint, and false everywhere else,
+            // because each multichannel speaker really does have a side.
+            Ambiguous = _useStereo && _stereoAmbiguous,
+        });
         return true;
     }
 

@@ -51,6 +51,34 @@ public sealed class StereoItd
     public double LastIldDb { get; private set; }
     public double LastCorrelationPeak { get; private set; }
 
+    /// <summary>
+    /// True when the last estimate could not tell left from right, so the caller must
+    /// not pick a side.
+    ///
+    /// <para>
+    /// A lateral angle near zero has no side. Two channels measure a lateral angle
+    /// well away from the axis, but near the axis the estimate is a couple of degrees of
+    /// noise either way, and the sign of that noise is meaningless. The overlay turns
+    /// the sign into "start at the left edge" or "start at the right edge", so without
+    /// this flag a source playing equally in both ears is assigned a side at random and
+    /// drawn as though it had been measured. The user's report was music doing exactly
+    /// that, always on the left.
+    /// </para>
+    /// </summary>
+    public bool LastAmbiguous { get; private set; }
+
+    /// <summary>
+    /// Lateral angle, in degrees, below which the side is not claimed.
+    ///
+    /// <para>
+    /// 25 degrees is a judgement, not a measurement. It is wide enough to cover the
+    /// spread the estimator actually shows around dead ahead - a few degrees, drifting
+    /// as the content changes - and narrow enough to leave a source genuinely off to
+    /// one side alone, which is the case the overlay exists to get right.
+    /// </para>
+    /// </summary>
+    public double AmbiguousLateralDegrees { get; set; } = 25.0;
+
     public void Reset()
     {
         Array.Clear(_left);
@@ -60,6 +88,7 @@ public sealed class StereoItd
         LastItdMicroseconds = 0;
         LastIldDb = 0;
         LastCorrelationPeak = 0;
+        LastAmbiguous = true;
     }
 
     /// <summary>
@@ -102,6 +131,7 @@ public sealed class StereoItd
         {
             _haveHistory = true;
             LastIldDb = ildDb;
+            LastAmbiguous = true;
             Result = (new Direction(ildDb < 0 ? -30 : 30, 0), 0.25, 0.0);
             return;
         }
@@ -113,6 +143,12 @@ public sealed class StereoItd
         LastCorrelationPeak = peak;
 
         var lateral = AzimuthFromItd(lag);
+
+        // Judged on the lateral value, before the front/back penalty below. A source
+        // whose side cannot be read is not made to have a side by being guessed at as
+        // being behind the player.
+        LastAmbiguous = Math.Abs(lateral) < AmbiguousLateralDegrees;
+
         if (Math.Abs(lateral) < 5 && Math.Abs(ildDb) < 3)
         {
             Result = (Direction.Forward, 0.2, 0.0);

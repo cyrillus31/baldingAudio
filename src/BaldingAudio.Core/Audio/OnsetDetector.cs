@@ -52,7 +52,21 @@ public readonly record struct AudioEvent(
     double ClassConfidence,
     double Confidence,
     double DistanceConfidence,
-    double Timestamp);
+    double Timestamp)
+{
+    /// <summary>
+    /// True when the side of this sound is not known, only its distance from ahead.
+    ///
+    /// <para>
+    /// Set on a two-channel endpoint, where a source near dead-ahead has no measurable
+    /// side: the lateral angle there is a couple of degrees of noise, and its sign is
+    /// not a measurement. The display draws such a cue on both edges rather than
+    /// choosing one, because choosing one is a coin toss presented as a fact. Always
+    /// false in multichannel mode, where each speaker has a real bearing.
+    /// </para>
+    /// </summary>
+    public bool Ambiguous { get; init; }
+}
 
 /// <summary>
 /// Detects the start of a sound. This is the latency-critical part of the whole

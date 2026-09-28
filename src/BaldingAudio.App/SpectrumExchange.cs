@@ -42,6 +42,23 @@ internal sealed class SpectrumExchange
     /// <summary>The frame the capture thread fills. Never the one the UI is reading.</summary>
     private double[] _write = new double[BinCount];
 
+    /// <summary>
+    /// The ambiguity flag of the frame currently in <see cref="_published"/>.
+    ///
+    /// <para>
+    /// Carried beside the buffer rather than inside it, and it has to travel with the
+    /// swap: the UI rebuilds a fresh <see cref="DirectionSpectrum"/> from the bins, so a
+    /// flag set on the capture thread's instance would arrive false. The overlay decides
+    /// whether to draw a cue on both edges from exactly this flag, and a flag silently
+    /// reset to false on the way across would leave the headless checks passing while the
+    /// real overlay kept picking one arbitrary side - which is the bug it exists to fix.
+    /// </para>
+    /// </summary>
+    private bool _publishedAmbiguous;
+
+    /// <summary>Ambiguity of the frame being written, swapped in step with the buffer.</summary>
+    private bool _writeAmbiguous;
+
     public int Bins => BinCount;
 
     /// <summary>Called on the capture thread once per analysed frame.</summary>
@@ -50,12 +67,14 @@ internal sealed class SpectrumExchange
         lock (_gate)
         {
             for (var i = 0; i < BinCount; i++) _write[i] = spectrum[i];
+            _writeAmbiguous = spectrum.Ambiguous;
 
             // Publish the buffer just written. The one it replaces becomes the spare the
             // next frame fills, so the two threads never touch the same array.
             //
             // Getting this backwards is what made every other frame arrive empty.
             (_published, _write) = (_write, _published ?? new double[BinCount]);
+            (_publishedAmbiguous, _writeAmbiguous) = (_writeAmbiguous, _publishedAmbiguous);
         }
     }
 
@@ -67,6 +86,7 @@ internal sealed class SpectrumExchange
             if (_published is null) return null;
             var view = new DirectionSpectrum(_published.Length);
             for (var i = 0; i < _published.Length; i++) view.SetBin(i, _published[i]);
+            view.Ambiguous = _publishedAmbiguous;
             return view;
         }
     }

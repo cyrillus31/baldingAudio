@@ -300,14 +300,20 @@ public sealed class AppHost : IDisposable
         var front = _capture?.HasReliableFrontBack ?? true;
         StatusChanged?.Invoke(
             $"baldingAudio | {mode}{(front ? "" : " (front/back uncertain)")} | " +
-            $"events {_eventsSeen} | peak {_lastDbfs:F0} dBFS | floor {_lastNoiseFloorDb:F0} dBFS");
+            $"events {_eventsSeen} | peak {_lastDbfs:F0} dBFS | floor {_lastNoiseFloorDb:F0} dBFS" +
+            (_paused ? " | PAUSED" : ""));
     }
 
     public void TogglePaused()
     {
         _paused = !_paused;
-        if (_paused) _tracker.Clear();
-        Log.Info(_paused ? "paused" : "resumed");
+
+        // Freeze, never clear. Clearing made a pause pixel-for-pixel identical to a
+        // crash: the user reported the overlay vanishing mid-game with no way to tell a
+        // toggle from a fault. Holding the last frame keeps it visibly there.
+        if (_paused) _tracker.Freeze(); else _tracker.Thaw();
+
+        Log.Info(_paused ? "paused (display held, capture still running)" : "resumed");
     }
 
     public void TogglePreset()

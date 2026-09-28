@@ -288,10 +288,6 @@ public static class OverlayLayout
 
         foreach (var e in events)
         {
-            EdgeAnchor(
-                screenWidth, screenHeight, e.Direction.AzimuthDegrees, style,
-                out var ax, out var ay, out var dx, out var dy);
-
             var length = LengthForLevel(e.Level, screenWidth, style);
 
             // Faint readings are dimmed, so an unreliable direction is visibly less
@@ -300,14 +296,48 @@ public static class OverlayLayout
             var distanceConfidence = 0.45 + 0.55 * Math.Clamp(e.DistanceConfidence, 0.0, 1.0);
             var alpha = Math.Clamp(e.Level, 0.0, 1.0) * confidence * distanceConfidence;
 
-            // (ax, ay) is the outer end at the side edge, and dx points inward, so the
-            // capsule is drawn from the edge toward the middle.
-            result.Add(new LineGeometry(
-                Math.Round(ax, 2), Math.Round(ay, 2), Math.Round(dx, 6), Math.Round(dy, 6),
-                Math.Round(length), Math.Round(thickness),
-                alpha, style.For(e.Class), e.Class, e.Level, e.Direction.AzimuthDegrees));
+            AddLine(result, e.Direction.AzimuthDegrees, alpha, e, length, thickness,
+                screenWidth, screenHeight, style);
+
+            // A cue whose side is not known is drawn from both edges at the same height.
+            //
+            // The sign of the bearing picks the edge, and near dead-ahead the bearing is
+            // a couple of degrees of noise, so its sign is not a measurement. Drawing it
+            // on the side the noise favoured shows a coin toss as a fact - which is how
+            // music playing in both headphones came out always on the left. Mirroring is
+            // honest: the distance from ahead is still shown, the side is not claimed.
+            //
+            // Negating the azimuth mirrors the edge and leaves |azimuth| alone, so both
+            // lines sit at the same height. They must, or the pair would read as two
+            // separate bearings rather than one unknown side.
+            if (e.Ambiguous)
+                AddLine(result, -e.Direction.AzimuthDegrees, alpha, e, length, thickness,
+                    screenWidth, screenHeight, style);
         }
 
         return result;
+    }
+
+    private static void AddLine(
+        List<LineGeometry> result,
+        double azimuthDegrees,
+        double alpha,
+        AudioEvent e,
+        double length,
+        double thickness,
+        int screenWidth,
+        int screenHeight,
+        OverlayStyle style)
+    {
+        EdgeAnchor(
+            screenWidth, screenHeight, azimuthDegrees, style,
+            out var ax, out var ay, out var dx, out var dy);
+
+        // (ax, ay) is the outer end at the side edge, and dx points inward, so the
+        // capsule is drawn from the edge toward the middle.
+        result.Add(new LineGeometry(
+            Math.Round(ax, 2), Math.Round(ay, 2), Math.Round(dx, 6), Math.Round(dy, 6),
+            Math.Round(length), Math.Round(thickness),
+            alpha, style.For(e.Class), e.Class, e.Level, azimuthDegrees));
     }
 }
